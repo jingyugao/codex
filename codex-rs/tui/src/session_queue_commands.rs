@@ -128,6 +128,7 @@ pub(super) async fn run_session_queue_action_with_app_server(
             request_id,
             params: ThreadQueueAddParams {
                 thread_id: thread_id.to_string(),
+                env: None,
                 input: vec![UserInput::Text {
                     text: message.to_string(),
                     text_elements: Vec::new(),

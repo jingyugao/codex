@@ -34,6 +34,7 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::turn_input::ToolEnv;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput;
 use codex_queue_extension::QueueServiceError;
@@ -353,6 +354,60 @@ async fn queued_input_and_unique_event_ids_round_trip() -> anyhow::Result<()> {
         }
         assert_ne!(events[0].id, events[1].id);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_environment_survives_reload_and_edit_without_affecting_legacy_items()
+-> anyhow::Result<()> {
+    let (queue, _home) = test_queue().await?;
+    let service =
+        QueuedItemService::new(queue.clone(), Weak::new(), Arc::new(NoopExtensionEventSink));
+    let thread_id = ThreadId::new();
+    let legacy_input = structured_user_input("legacy");
+    // Records written by an older process remain readable.
+    queue
+        .enqueue(thread_id, serde_json::to_string(&legacy_input)?)
+        .await?;
+    let env = ToolEnv(std::collections::HashMap::from([(
+        "TRACE_ID".to_string(),
+        "queued-trace".to_string(),
+    )]));
+    let item = service
+        .enqueue_with_env(thread_id, user_input("original"), Some(env.clone()))
+        .await?;
+    assert!(!format!("{item:?}").contains("queued-trace"));
+    drop(service);
+
+    let reloaded = QueuedItemService::new(queue, Weak::new(), Arc::new(NoopExtensionEventSink));
+    let items = reloaded.list(thread_id).await?;
+    assert_eq!(items[0].input, legacy_input);
+    assert_eq!(items[0].tool_env, None);
+    assert_eq!(items[1].tool_env, Some(env.clone()));
+    let edited = reloaded
+        .update(thread_id, item.id, user_input("edited"))
+        .await?
+        .expect("item exists");
+    assert_eq!(edited.tool_env, Some(env));
+    assert_eq!(reloaded.list(thread_id).await?[1], edited);
+
+    for invalid_env in [
+        std::collections::HashMap::from([("CODEX_THREAD_ID".to_string(), "reserved".to_string())]),
+        std::collections::HashMap::from([("BAD=KEY".to_string(), "bad".to_string())]),
+        std::collections::HashMap::from([("TOO_LARGE".to_string(), "x".repeat(65537))]),
+    ] {
+        assert!(matches!(
+            reloaded
+                .enqueue_with_env(
+                    thread_id,
+                    user_input("rejected"),
+                    Some(ToolEnv(invalid_env))
+                )
+                .await,
+            Err(QueueServiceError::InvalidEnvironment(_))
+        ));
+    }
+    assert_eq!(reloaded.list(thread_id).await?.len(), 2);
     Ok(())
 }
 

@@ -941,13 +941,26 @@ pub struct QueuedSubmission {
     pub client_user_message_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadQueueAddParams {
     pub thread_id: String,
+    /// Subprocess environment for the turn started by this queued submission.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub env: Option<HashMap<String, String>>,
     pub input: Vec<UserInput>,
     pub client_user_message_id: String,
+}
+
+impl std::fmt::Debug for ThreadQueueAddParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadQueueAddParams")
+            .field("thread_id", &self.thread_id)
+            .field("env", &self.env.as_ref().map(|_| "[REDACTED]"))
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

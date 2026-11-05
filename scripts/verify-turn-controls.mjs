@@ -224,6 +224,90 @@ try {
     }
   });
 
+  await check('queued-env-auto-dispatch-and-update', async () => {
+    let held;
+    let count = 0;
+    handler = async (body, response) => {
+      const n = ++count;
+      if (n === 1) held = { body, response };
+      else if (n % 2 === 1) execute(response, body,
+        `printf '%s' "${'${TRACE_MARKER-unset}'}" > queue-${(n - 1) / 2}.trace`, `queue_${n}`);
+      else final(response);
+    };
+    const id = await thread();
+    const turnId = await start(id, 'QUEUE_ACTIVE', { TRACE_MARKER: 'ACTIVE_TRACE' });
+    await until(() => held);
+    const add = (text, env) => rpc('thread/queue/add', { threadId: id,
+      input: [{ type: 'text', text }], clientUserMessageId: text,
+      ...(env === undefined ? {} : { env }) });
+    const first = await add('QUEUED_FIRST', { TRACE_MARKER: 'QUEUE_FIRST' });
+    await add('QUEUED_SECOND', { TRACE_MARKER: 'QUEUE_SECOND' });
+    await add('QUEUED_EMPTY');
+    const before = await rpc('thread/queue/list', { threadId: id });
+    assert.equal(before.data.length, 3);
+    await assert.rejects(add('QUEUED_INVALID', { 'INVALID=KEY': 'bad' }));
+    const after = await rpc('thread/queue/list', { threadId: id });
+    assert.deepEqual(after.data, before.data, 'Invalid env changed the queue');
+    await rpc('thread/queue/update', { threadId: id, queuedSubmissionId: first.queuedSubmission.id,
+      input: [{ type: 'text', text: 'QUEUED_FIRST_UPDATED' }] });
+    execute(held.response, held.body, 'printf \'%s\' "$TRACE_MARKER" > queue-active.trace', 'queue_active');
+    await ended(turnId);
+    await until(() => events.filter(item => item.method === 'turn/completed' && item.params.threadId === id).length === 4);
+    assert.equal(await readFile(join(workspace, 'queue-active.trace'), 'utf8'), 'ACTIVE_TRACE');
+    for (const [index, value] of [[1, 'QUEUE_FIRST'], [2, 'QUEUE_SECOND'], [3, 'unset']]) {
+      assert.equal(await readFile(join(workspace, `queue-${index}.trace`), 'utf8'), value);
+    }
+    const completed = events.filter(item => item.method === 'turn/completed' && item.params.threadId === id);
+    const logs = (await readFile(hookLog, 'utf8')).trim().split('\n');
+    for (const [index, trace] of [[0, 'ACTIVE_TRACE'], [1, 'QUEUE_FIRST'], [2, 'QUEUE_SECOND'], [3, 'unset']]) {
+      assert.equal(completed[index].params.turn.status, 'completed');
+      for (const name of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) {
+        assert(logs.includes(`${completed[index].params.turn.id}|${name}|${trace}|base-hook`), `Missing queued hook ${name}/${trace}`);
+      }
+    }
+    assert(JSON.stringify(requests).includes('QUEUED_FIRST_UPDATED'));
+    for (const trace of ['ACTIVE_TRACE', 'QUEUE_FIRST', 'QUEUE_SECOND']) {
+      assert(!JSON.stringify(requests).includes(trace), 'Queued environment leaked into model input');
+    }
+    assert.equal((await rpc('thread/queue/list', { threadId: id })).data.length, 0);
+  });
+
+  await check('queued-env-explicit-start-after-interrupt', async () => {
+    let held;
+    let count = 0;
+    handler = async (body, response) => {
+      const n = ++count;
+      if (n === 1) held = { body, response };
+      else if (n % 2 === 0) execute(response, body,
+        `printf '%s' "${'${TRACE_MARKER-unset}'}" > queue-explicit-${n / 2}.trace`, `queue_explicit_${n}`);
+      else final(response);
+    };
+    const id = await thread();
+    const turnId = await start(id, 'QUEUE_INTERRUPT', { TRACE_MARKER: 'INTERRUPTED_TRACE' });
+    await until(() => held);
+    const add = (text, trace) => rpc('thread/queue/add', { threadId: id,
+      input: [{ type: 'text', text }], clientUserMessageId: text, env: { TRACE_MARKER: trace } });
+    await add('EXPLICIT_LATER', 'EXPLICIT_LATER_TRACE');
+    const chosen = await add('EXPLICIT_FIRST', 'EXPLICIT_FIRST_TRACE');
+    await rpc('turn/interrupt', { threadId: id, turnId });
+    await ended(turnId, 'interrupted');
+    const started = await rpc('thread/queue/start', { threadId: id, queuedSubmissionId: chosen.queuedSubmission.id });
+    await ended(started.turn.id);
+    await until(() => events.filter(item => item.method === 'turn/completed' && item.params.threadId === id).length === 3);
+    assert.equal(await readFile(join(workspace, 'queue-explicit-1.trace'), 'utf8'), 'EXPLICIT_FIRST_TRACE');
+    assert.equal(await readFile(join(workspace, 'queue-explicit-2.trace'), 'utf8'), 'EXPLICIT_LATER_TRACE');
+    const completed = events.filter(item => item.method === 'turn/completed' && item.params.threadId === id);
+    const logs = (await readFile(hookLog, 'utf8')).trim().split('\n');
+    for (const [index, trace] of [[1, 'EXPLICIT_FIRST_TRACE'], [2, 'EXPLICIT_LATER_TRACE']]) {
+      assert.equal(completed[index].params.turn.status, 'completed');
+      for (const name of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) {
+        assert(logs.includes(`${completed[index].params.turn.id}|${name}|${trace}|base-hook`), `Missing explicit queue hook ${name}/${trace}`);
+      }
+    }
+    assert.equal((await rpc('thread/queue/list', { threadId: id })).data.length, 0);
+    held.response.destroy();
+  });
+
   await check('ordinary-interrupt-resume-without-user-message', async () => {
     let held;
     let resumedRequest;

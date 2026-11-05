@@ -4661,6 +4661,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "core_test_support",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",

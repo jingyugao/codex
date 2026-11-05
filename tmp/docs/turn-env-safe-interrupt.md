@@ -6,6 +6,7 @@
 | --- | --- |
 | `turn/start` | 接收 `env`，为该 turn 启动的工具与 command hook 子进程设置变量 |
 | `turn/steer` | 接收 `env`，替换当前 turn 后续模型步骤使用的变量 |
+| `thread/queue/add` | 接收 `env`，随排队输入保存，在该输入启动新 turn 时应用 |
 | `turn/interrupt` | 沿用原有立即中断 |
 | `turn/resume` | 基于已有历史启动新的 turn，无需发送“继续”消息 |
 
@@ -72,7 +73,17 @@ turn ID 取自 `result.turn.id`。该 turn 的 `exec_command` 子进程可以读
 
 本地 command hook 的基础环境来自 App Server 启动环境，远程 command hook 的基础环境来自对应执行环境的 shell 策略；之后叠加 turn env，hook 内部设置的变量优先，仍执行原有受限变量过滤。工具 shell 中临时执行的 `export` 不会回传给后续 hook；需要传递的 trace 变量应通过上述 `env` 字段设置。
 
-映射只保存在内存中，不作为配置写入会话历史或提示词；Debug 输出对映射脱敏。如果工具主动打印变量，其输出仍可能进入历史和模型上下文。接线覆盖 unified exec、在本地或远程环境运行的 command hook。legacy notify、MCP hook、已启动的 MCP 服务和客户端 dynamic tool 不会自动接收此映射；没有关联 turn 的 SessionEnd hook 不继承上一 turn 的映射。
+`turn/start` 和 `turn/steer` 的映射只保存在内存中；排队输入的映射随队列项持久化，启动后从队列移除。映射不作为配置写入会话历史或提示词，Debug 输出对映射脱敏。如果工具主动打印变量，其输出仍可能进入历史和模型上下文。接线覆盖 unified exec、在本地或远程环境运行的 command hook。legacy notify、MCP hook、已启动的 MCP 服务和客户端 dynamic tool 不会自动接收此映射；没有关联 turn 的 SessionEnd hook 不继承上一 turn 的映射。
+
+### 排队输入
+
+初始化客户端时需声明 `capabilities.experimentalApi: true`，沿用原生队列接口的要求：
+
+```json
+{"jsonrpc":"2.0","id":12,"method":"thread/queue/add","params":{"threadId":"THREAD_ID","input":[{"type":"text","text":"运行下一项检查"}],"clientUserMessageId":"queued-message-001","env":{"TRACE_ID":"trace-queued"}}}
+```
+
+入队不改变活跃 turn 的 env。自动出队和 `thread/queue/start` 都将该队列项的 env 应用到新 turn 的工具和 command hook；省略或传 `null` 表示新 turn 无临时覆盖，`{}` 也表示空覆盖，不继承前一 turn。`thread/queue/update` 只编辑输入并保留该项 env。入队时使用相同的 env 校验规则，非法 env 不写入队列；旧版队列项按无 env 读取。add/list 等响应仍保持原有结构，不回显 env。
 
 ## 立即中断后续跑
 
@@ -109,6 +120,8 @@ node scripts/verify-turn-controls.mjs
 3. 普通中断后自动续跑、保留 env、不添加“继续”消息，以及拒绝再次恢复旧 turn。
 
 脚本同时检查本地 `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`Interrupt` command hooks 对 turn env 和基础环境的读取、线程隔离，以及异步 hook 的 env 快照。
+
+另外两项队列回归覆盖自动派发、更新输入保留 env、非法 env 拒绝、队列项隔离，以及中断后指定队列项启动。队列服务测试覆盖 env 保存后重新加载、旧记录兼容及编辑保留 env。
 
 脚本输出临时目录内的 `report.json` 路径，并保留通知记录和服务端 stderr。它不验证真实模型能力或远端 exec-server 连接；实际结果以本次运行报告为准。
 

@@ -53,7 +53,7 @@ pub struct ResponseItemAnnotations {
 }
 
 /// Per-turn subprocess environment. Debug intentionally never exposes values.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ToolEnv(pub HashMap<String, String>);
 
 impl std::fmt::Debug for ToolEnv {
