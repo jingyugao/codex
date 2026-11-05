@@ -5554,24 +5554,35 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
 }
 
 #[test]
-fn turn_control_and_env_preserve_wire_compatibility_and_redact_debug() {
+fn turn_resume_and_env_preserve_wire_compatibility_and_redact_debug() {
     let interrupt: TurnInterruptParams = serde_json::from_value(json!({
         "threadId": "thread_123",
         "turnId": "turn_123"
     }))
     .expect("legacy interrupt should deserialize");
     assert_eq!(
-        interrupt.mode.unwrap_or_default(),
-        TurnInterruptMode::Immediate
+        serde_json::to_value(&interrupt).unwrap(),
+        json!({
+            "threadId": "thread_123", "turnId": "turn_123"
+        })
     );
-    let safe: TurnInterruptParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "turnId": "turn_123",
-        "mode": "safe"
+    let resume: TurnResumeParams = serde_json::from_value(json!({
+        "threadId": "thread_123", "turnId": "turn_123"
     }))
-    .expect("safe interrupt should deserialize");
-    assert_eq!(safe.mode, Some(TurnInterruptMode::Safe));
-    assert_eq!(serde_json::to_value(&safe).unwrap()["mode"], "safe");
+    .expect("resume should deserialize");
+    assert_eq!(
+        serde_json::to_value(&resume).unwrap(),
+        json!({
+            "threadId": "thread_123", "turnId": "turn_123"
+        })
+    );
+    let response = TurnResumeResponse {
+        turn_id: "new_turn".to_string(),
+    };
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        json!({"turnId": "new_turn"})
+    );
 
     let start: TurnStartParams = serde_json::from_value(json!({
         "threadId": "thread_123", "input": [],

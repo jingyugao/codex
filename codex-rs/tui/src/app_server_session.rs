@@ -1738,7 +1738,6 @@ impl AppServerSession {
             .request_typed(ClientRequest::TurnInterrupt {
                 request_id,
                 params: TurnInterruptParams {
-                    mode: None,
                     thread_id: thread_id.to_string(),
                     turn_id,
                 },

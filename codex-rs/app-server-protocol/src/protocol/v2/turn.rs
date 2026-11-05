@@ -379,47 +379,18 @@ pub struct TurnSteerResponse {
     pub turn_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum TurnInterruptMode {
-    #[default]
-    Immediate,
-    Safe,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnInterruptParams {
     pub thread_id: String,
     pub turn_id: String,
-    /// Omission retains the ordinary immediate interrupt behavior.
-    #[ts(optional = nullable)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<TurnInterruptMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnInterruptResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TurnControlReadParams {
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TurnControlReadResponse {
-    /// One of running, pauseRequested, paused, or resuming.
-    pub status: String,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -433,25 +404,7 @@ pub struct TurnResumeParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnResumeResponse {
-    /// Safe resume retains the turn id and emits turn/resumed before admitting tools.
-    /// An ordinary interrupted turn restarts with a new id and emits turn/started instead.
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TurnPausedNotification {
-    /// Pauses model/tool-call admission, not background processes from completed tool calls.
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TurnResumedNotification {
-    pub thread_id: String,
+    /// The new turn id; resuming an interrupted turn starts a new turn.
     pub turn_id: String,
 }
 

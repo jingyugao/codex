@@ -4,7 +4,6 @@
 
 export type TurnResumeResponse = {
 /**
- * Safe resume retains the turn id and emits turn/resumed before admitting tools.
- * An ordinary interrupted turn restarts with a new id and emits turn/started instead.
+ * The new turn id; resuming an interrupted turn starts a new turn.
  */
 turnId: string, };

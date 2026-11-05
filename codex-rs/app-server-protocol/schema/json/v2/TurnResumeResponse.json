@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
     "turnId": {
-      "description": "Safe resume retains the turn id and emits turn/resumed before admitting tools. An ordinary interrupted turn restarts with a new id and emits turn/started instead.",
+      "description": "The new turn id; resuming an interrupted turn starts a new turn.",
       "type": "string"
     }
   },

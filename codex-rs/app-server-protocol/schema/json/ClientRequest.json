@@ -5993,21 +5993,6 @@
       ],
       "type": "object"
     },
-    "TurnControlReadParams": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId",
-        "turnId"
-      ],
-      "type": "object"
-    },
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
@@ -6033,26 +6018,8 @@
       ],
       "type": "object"
     },
-    "TurnInterruptMode": {
-      "enum": [
-        "immediate",
-        "safe"
-      ],
-      "type": "string"
-    },
     "TurnInterruptParams": {
       "properties": {
-        "mode": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/TurnInterruptMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Omission retains the ordinary immediate interrupt behavior."
-        },
         "threadId": {
           "type": "string"
         },
@@ -8183,30 +8150,6 @@
         "params"
       ],
       "title": "Turn/interruptRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "turn/control/read"
-          ],
-          "title": "Turn/control/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/TurnControlReadParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Turn/control/readRequest",
       "type": "object"
     },
     {

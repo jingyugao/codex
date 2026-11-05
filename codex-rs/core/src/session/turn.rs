@@ -2887,13 +2887,6 @@ async fn try_run_sampling_request(
     draining_for_mailbox: &mut bool,
 ) -> CodexResult<SamplingRequestResult> {
     let turn_context = Arc::clone(&step_context.turn);
-    let turn_control = turn_context.control();
-    let model_work = turn_control
-        .enter_model()
-        .or_cancel(&cancellation_token)
-        .await
-        .map_err(|_| CodexErr::TurnAborted)?
-        .ok_or(CodexErr::TurnAborted)?;
     feedback_tags!(
         model = step_context.settings.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy(),
@@ -3731,7 +3724,6 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    model_work.finish_model(!in_flight.is_empty() || needs_follow_up);
     if !in_flight.is_empty() {
         let _tool_blocking_timing_guard = turn_context
             .turn_timing_state

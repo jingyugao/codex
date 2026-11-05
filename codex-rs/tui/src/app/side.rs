@@ -543,7 +543,6 @@ impl App {
                 .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
                     request_id: interrupt_request_id,
                     params: TurnInterruptParams {
-                        mode: None,
                         thread_id: thread_id.to_string(),
                         turn_id: turn_id.clone(),
                     },
@@ -556,7 +555,6 @@ impl App {
                     .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
                         request_id: retry_interrupt_request_id,
                         params: TurnInterruptParams {
-                            mode: None,
                             thread_id: thread_id.to_string(),
                             turn_id: actual_turn_id,
                         },

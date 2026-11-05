@@ -641,7 +641,6 @@ fn sample_turn_interrupt_request(turn_id: &str) -> ClientRequest {
     ClientRequest::TurnInterrupt {
         request_id: RequestId::Integer(3),
         params: TurnInterruptParams {
-            mode: None,
             thread_id: "thread-1".to_string(),
             turn_id: turn_id.to_string(),
         },

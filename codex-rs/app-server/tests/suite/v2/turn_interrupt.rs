@@ -109,7 +109,6 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let thread_id = thread.id.clone();
     let interrupt_id = mcp
         .send_turn_interrupt_request(TurnInterruptParams {
-            mode: None,
             thread_id: thread_id.clone(),
             turn_id: "wrong-turn".to_string(),
         })
@@ -133,7 +132,6 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         .request(|request_id| ClientRequest::TurnInterrupt {
             request_id,
             params: TurnInterruptParams {
-                mode: None,
                 thread_id: thread_id.clone(),
                 turn_id: turn_id.clone(),
             },
@@ -204,7 +202,6 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
 
     let interrupt_id = mcp
         .send_turn_interrupt_request(TurnInterruptParams {
-            mode: None,
             thread_id: thread.id,
             turn_id: turn.id,
         })
@@ -305,7 +302,6 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         .request(|request_id| ClientRequest::TurnInterrupt {
             request_id,
             params: TurnInterruptParams {
-                mode: None,
                 thread_id: thread.id.clone(),
                 turn_id: turn.id.clone(),
             },

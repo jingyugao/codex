@@ -382,8 +382,6 @@ impl ChatWidget {
                 }
             }
             ServerNotification::ServerRequestResolved(_)
-            | ServerNotification::TurnPaused(_)
-            | ServerNotification::TurnResumed(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::GatewayOAuthChanged(_)
             | ServerNotification::AccountRateLimitsUpdated(_)

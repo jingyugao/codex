@@ -311,25 +311,6 @@ impl ToolCallRuntime {
                 }
                 .or_cancel_tool(&invocation_cancellation_token)
                 .await?;
-                // Admission and safe-interrupt requests are serialized by the turn gate.
-                // Already-admitted handlers run to completion; their queued siblings stay parked.
-                let control = turn.control();
-                let is_container = matches!(
-                    dispatch_call.tool_name.name.as_str(),
-                    crate::tools::code_mode::PUBLIC_TOOL_NAME
-                        | crate::tools::code_mode::WAIT_TOOL_NAME
-                );
-                let admission = async {
-                    if is_container {
-                        control.enter_tool_container().await
-                    } else {
-                        control.enter_tool().await
-                    }
-                };
-                let _safe_admission = admission
-                    .or_cancel_tool(&invocation_cancellation_token)
-                    .await?
-                    .ok_or_else(|| FunctionCallError::Fatal("turn has ended".to_string()))?;
                 // Publish the completed path before releasing the admission lock,
                 // including when cancellation drops the handler future.
                 let _admitted_timing = work_timing.map(|(gate, work)| {

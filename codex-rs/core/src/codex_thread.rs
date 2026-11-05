@@ -188,6 +188,12 @@ pub enum ConfigRefreshOutcome {
     Rejected,
 }
 
+/// Ephemeral state retained for ordinary interrupt/resume.
+pub(crate) struct InterruptedTurn {
+    pub(crate) turn_id: String,
+    pub(crate) env: codex_protocol::turn_input::ToolEnv,
+}
+
 pub use codex_guardian_context::GuardianRootMessage;
 
 pub use codex_guardian_reviewer::GuardianAuthorizationVersion;
@@ -305,79 +311,13 @@ impl CodexThread {
         self.session.services.analytics_events_client.is_enabled()
     }
 
-    /// Read the in-memory control state of the matching active regular turn.
-    pub async fn turn_control_status(&self, turn_id: &str) -> CodexResult<String> {
-        let active = self.session.active_turn.lock().await;
-        let task = active
-            .as_ref()
-            .and_then(|turn| turn.task.as_ref())
-            .filter(|task| {
-                task.turn_context.sub_id == turn_id
-                    && task.kind == crate::state::TaskKind::Regular
-                    && !task.cancellation_token.is_cancelled()
-            })
-            .ok_or_else(|| CodexErr::InvalidRequest("no matching active regular turn".into()))?;
-        task.turn_context
-            .control()
-            .status()
-            .map(str::to_owned)
-            .map_err(CodexErr::InvalidRequest)
-    }
-
-    /// Request cooperative suspension without cancelling sampling or running tools.
-    pub async fn request_safe_interrupt(
-        &self,
-        turn_id: &str,
-    ) -> CodexResult<crate::turn_control::SafeInterruptHandle> {
-        let active = self.session.active_turn.lock().await;
-        let task = active
-            .as_ref()
-            .and_then(|turn| turn.task.as_ref())
-            .ok_or_else(|| CodexErr::InvalidRequest("no active turn to pause".into()))?;
-        if task.turn_context.sub_id != turn_id
-            || task.kind != crate::state::TaskKind::Regular
-            || task.cancellation_token.is_cancelled()
-        {
-            return Err(CodexErr::InvalidRequest(
-                "expected an active matching regular turn".into(),
-            ));
-        }
-        task.turn_context
-            .control()
-            .request()
-            .map_err(CodexErr::InvalidRequest)
-    }
-
-    /// Prepare same-turn resume, or restart an ordinary interrupted turn without user input.
-    pub async fn resume_turn(
-        &self,
-        turn_id: &str,
-    ) -> CodexResult<crate::turn_control::TurnResumeOutcome> {
-        {
-            let active = self.session.active_turn.lock().await;
-            if let Some(task) = active.as_ref().and_then(|turn| turn.task.as_ref()) {
-                if task.turn_context.sub_id != turn_id
-                    || task.kind != crate::state::TaskKind::Regular
-                    || task.cancellation_token.is_cancelled()
-                {
-                    return Err(CodexErr::InvalidRequest(
-                        "expected an active matching regular turn".into(),
-                    ));
-                }
-                return task
-                    .turn_context
-                    .control()
-                    .prepare_resume()
-                    .await
-                    .map(crate::turn_control::TurnResumeOutcome::Paused)
-                    .map_err(CodexErr::InvalidRequest);
-            }
-        }
+    /// Restart an ordinary interrupted turn without adding a user message.
+    pub async fn resume_turn(&self, turn_id: &str) -> CodexResult<String> {
         let interrupted = self
             .session
             .services
             .thread_extension_data
-            .get::<crate::turn_control::InterruptedTurn>()
+            .get::<InterruptedTurn>()
             .filter(|saved| saved.turn_id == turn_id)
             .ok_or_else(|| {
                 CodexErr::InvalidRequest("no matching interrupted turn to resume".into())
@@ -390,9 +330,7 @@ impl CodexThread {
             )
             .await?;
         match outcome {
-            TurnInputSubmission::Started { turn_id, .. } => {
-                Ok(crate::turn_control::TurnResumeOutcome::Restarted { turn_id })
-            }
+            TurnInputSubmission::Started { turn_id, .. } => Ok(turn_id),
             _ => Err(CodexErr::InvalidRequest(
                 "thread changed before resume".into(),
             )),

@@ -184,62 +184,28 @@ try {
     assert.equal(await readFile(join(workspace, 'concurrent-B.trace'), 'utf8'), 'ONLY_B');
   });
 
-  await check('safe-interrupt-before-tool-resume-same-turn-exactly-once', async () => {
-    let held;
-    let count = 0;
-    handler = async (body, response) => { if (++count === 1) held = { body, response }; else final(response); };
-    const id = await thread();
-    const turnId = await start(id, 'SAFE_INTERRUPT_TASK');
-    await until(() => held);
-    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
-    assert.equal((await rpc('turn/control/read', { threadId: id, turnId })).status, 'pauseRequested');
-    execute(held.response, held.body, 'printf x >> effect.txt', 'safe_effect');
-    await until(() => event('turn/paused', turnId));
-    assert.equal(await exists('effect.txt'), false);
-    assert.equal((await rpc('turn/control/read', { threadId: id, turnId })).status, 'paused');
-    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
-    assert.equal((await rpc('turn/resume', { threadId: id, turnId })).turnId, turnId);
-    await ended(turnId);
-    assert.equal(await readFile(join(workspace, 'effect.txt'), 'utf8'), 'x');
-    assert.equal(events.filter(item => item.method === 'turn/paused' && item.params.turnId === turnId).length, 1);
-    const resumed = events.indexOf(event('turn/resumed', turnId));
-    const toolStarted = events.findIndex(item => item.method === 'item/started' && item.params.turnId === turnId
-      && item.params.item?.type === 'commandExecution');
-    assert(resumed >= 0 && toolStarted > resumed, 'Tool start must follow resumed event');
-  });
-
-  await check('safe-interrupt-drains-running-tool', async () => {
-    let count = 0;
-    handler = async (body, response) => {
-      if (++count === 1) execute(response, body, 'printf started > running.flag; sleep 0.5; printf done > done.flag', 'drain_running');
-      else final(response);
-    };
-    const id = await thread();
-    const turnId = await start(id, 'DRAIN_RUNNING_TOOL_TASK');
-    await until(() => exists('running.flag'));
-    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
-    await until(() => event('turn/paused', turnId));
-    assert.equal(await exists('done.flag'), true);
-    assert.equal((await rpc('turn/resume', { threadId: id, turnId })).turnId, turnId);
-    await ended(turnId);
-  });
-
   await check('ordinary-interrupt-resume-without-user-message', async () => {
     let held;
+    let resumedRequest;
     let count = 0;
     const initialRequest = requests.length;
     handler = async (body, response) => {
       if (++count === 1) held = { body, response };
-      else if (count === 2) execute(response, body, 'printf \'%s\' "$TRACE_MARKER" > resumed.trace', 'resumed_env');
+      else if (count === 2) resumedRequest = { body, response };
       else final(response);
     };
     const id = await thread();
     const turnId = await start(id, 'ORIGINAL_INTERRUPTED_TASK', { TRACE_MARKER: 'RESUMED_TRACE' });
     await until(() => held);
+    await assert.rejects(rpc('turn/resume', { threadId: id, turnId }));
     await rpc('turn/interrupt', { threadId: id, turnId });
     await ended(turnId, 'interrupted');
     const resumed = await rpc('turn/resume', { threadId: id, turnId });
     assert.notEqual(resumed.turnId, turnId);
+    await until(() => resumedRequest);
+    await assert.rejects(rpc('turn/resume', { threadId: id, turnId }));
+    execute(resumedRequest.response, resumedRequest.body,
+      'printf \'%s\' "$TRACE_MARKER" > resumed.trace', 'resumed_env');
     await ended(resumed.turnId);
     assert.equal(await readFile(join(workspace, 'resumed.trace'), 'utf8'), 'RESUMED_TRACE');
     const userText = (requests.at(-1).input || []).filter(item => item.role === 'user')
@@ -252,43 +218,6 @@ try {
     held.response.destroy();
   });
 
-  await check('safe-pause-keeps-existing-background-process-alive', async () => {
-    let held;
-    let count = 0;
-    handler = async (body, response) => {
-      if (++count === 1) execute(response, body,
-        'printf started > background-started.flag; sleep 3; printf done > background-done.flag', 'background_process');
-      else if (count === 2) held = { body, response };
-      else final(response);
-    };
-    const id = await thread();
-    const turnId = await start(id, 'BACKGROUND_PROCESS_BOUNDARY_TASK');
-    await until(() => held);
-    assert.equal(await exists('background-done.flag'), false);
-    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
-    execute(held.response, held.body, 'printf resumed > after-background-resume.flag', 'after_background');
-    await until(() => event('turn/paused', turnId));
-    assert.equal(await exists('after-background-resume.flag'), false);
-    await until(() => exists('background-done.flag'));
-    assert.equal((await rpc('turn/control/read', { threadId: id, turnId })).status, 'paused');
-    await rpc('turn/resume', { threadId: id, turnId });
-    await ended(turnId);
-    assert.equal(await readFile(join(workspace, 'after-background-resume.flag'), 'utf8'), 'resumed');
-  });
-
-  await check('hard-interrupt-closes-a-paused-turn', async () => {
-    let held;
-    handler = async (body, response) => { held = { body, response }; };
-    const id = await thread();
-    const turnId = await start(id, 'CANCEL_PAUSED_TASK');
-    await until(() => held);
-    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
-    execute(held.response, held.body, 'printf forbidden > cancelled-effect.txt', 'cancelled_effect');
-    await until(() => event('turn/paused', turnId));
-    await rpc('turn/interrupt', { threadId: id, turnId });
-    await ended(turnId, 'interrupted');
-    assert.equal(await exists('cancelled-effect.txt'), false);
-  });
   report.status = 'passed';
 } catch (error) {
   report.status = 'failed'; report.error = { message: error.message, stack: error.stack };

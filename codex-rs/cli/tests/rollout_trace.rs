@@ -249,7 +249,6 @@ async fn accepted_output_survives_interruption_and_shutdown() -> Result<()> {
         .request(|request_id| ClientRequest::TurnInterrupt {
             request_id,
             params: TurnInterruptParams {
-                mode: None,
                 thread_id: thread.id.clone(),
                 turn_id: turn.id.clone(),
             },

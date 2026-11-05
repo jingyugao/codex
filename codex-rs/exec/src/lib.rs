@@ -1337,7 +1337,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     ClientRequest::TurnInterrupt {
                         request_id: request_ids.next(),
                         params: TurnInterruptParams {
-                            mode: None,
                             thread_id: primary_thread_id_for_requests.clone(),
                             turn_id: task_id.clone(),
                         },
