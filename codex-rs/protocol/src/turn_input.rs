@@ -52,6 +52,38 @@ pub struct ResponseItemAnnotations {
     pub retain: bool,
 }
 
+/// Per-turn subprocess environment. Debug intentionally never exposes values.
+#[derive(Clone, Default)]
+pub struct ToolEnv(pub HashMap<String, String>);
+
+impl std::fmt::Debug for ToolEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ToolEnv([REDACTED])")
+    }
+}
+
+impl ToolEnv {
+    /// Validate before admission without including caller-provided data in errors.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.0.len() > 64 || self.0.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() > 65536
+        {
+            return Err("tool environment exceeds size limits");
+        }
+        for (key, value) in &self.0 {
+            if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+                return Err("invalid tool environment variable");
+            }
+            if ["CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID", "CODEX_SESSION_ID"]
+                .iter()
+                .any(|reserved| key.eq_ignore_ascii_case(reserved))
+            {
+                return Err("reserved tool environment variable");
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One turn input and the context that follows it through submission.
 ///
 /// Callers choose start-or-steer, idle-start, or steer-only behavior through
@@ -59,6 +91,8 @@ pub struct ResponseItemAnnotations {
 #[derive(Clone, Debug)]
 pub struct TurnInputRequest {
     pub input: TurnInput,
+    /// Ephemeral subprocess environment replacement; absent preserves the active turn.
+    pub tool_env: Option<ToolEnv>,
     /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
     /// Ignored for all other inputs, including raw user-role Responses items.
     pub user_item_uuid: Option<uuid::Uuid>,
@@ -124,6 +158,7 @@ impl TurnInputRequest {
     pub fn new(input: TurnInput) -> Self {
         Self {
             input,
+            tool_env: None,
             user_item_uuid: None,
             user_input_extension_data: BTreeMap::new(),
             thread_settings: ThreadSettingsOverrides::default(),
@@ -140,6 +175,12 @@ impl TurnInputRequest {
             content,
             client_id: None,
         })
+    }
+
+    /// Sets a per-turn subprocess environment replacement.
+    pub fn with_tool_env(mut self, env: Option<HashMap<String, String>>) -> Self {
+        self.tool_env = env.map(ToolEnv);
+        self
     }
 
     /// Persistent thread settings applied when Core accepts this input.
@@ -343,4 +384,34 @@ pub enum NotSubmittedReason {
 
     /// `start_or_steer_turn` or `steer_turn` reached a steering path with empty user input.
     EmptyInput,
+}
+
+#[cfg(test)]
+mod tool_env_tests {
+    use super::ToolEnv;
+    use std::collections::HashMap;
+
+    #[test]
+    fn validates_and_redacts_tool_environment() {
+        let env = ToolEnv(HashMap::from([("TRACE_ID".into(), "secret-value".into())]));
+        assert!(env.validate().is_ok());
+        assert!(!format!("{env:?}").contains("secret-value"));
+        for (key, value) in [
+            ("", "x"),
+            ("BAD=NAME", "x"),
+            ("A", "bad\0value"),
+            ("codex_thread_id", "x"),
+        ] {
+            assert!(
+                ToolEnv(HashMap::from([(key.into(), value.into())]))
+                    .validate()
+                    .is_err()
+            );
+        }
+        assert!(
+            ToolEnv(HashMap::from([("A".into(), "x".repeat(65_536))]))
+                .validate()
+                .is_err()
+        );
+    }
 }

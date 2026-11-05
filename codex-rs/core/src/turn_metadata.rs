@@ -181,6 +181,7 @@ pub(crate) struct TurnMetadataState {
     turn_started_at_unix_ms: RwLock<Option<i64>>,
     responses_api_metadata: RwLock<BTreeMap<String, String>>,
     responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
+    tool_env: RwLock<codex_protocol::turn_input::ToolEnv>,
     user_input_requested_during_turn: AtomicBool,
     enrichment_task: Mutex<Option<AbortOnDropHandle<()>>>,
     git_enrichment_complete: watch::Sender<bool>,
@@ -217,6 +218,22 @@ impl codex_analytics::TurnAnalyticsMetadata for TurnMetadataState {
 }
 
 impl TurnMetadataState {
+    pub(crate) fn replace_tool_env(&self, env: Option<codex_protocol::turn_input::ToolEnv>) {
+        if let Some(env) = env {
+            *self
+                .tool_env
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = env;
+        }
+    }
+
+    pub(crate) fn tool_env_snapshot(&self) -> codex_protocol::turn_input::ToolEnv {
+        self.tool_env
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
@@ -266,6 +283,7 @@ impl TurnMetadataState {
             turn_started_at_unix_ms: RwLock::new(None),
             responses_api_metadata: RwLock::new(BTreeMap::new()),
             responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
+            tool_env: RwLock::new(Default::default()),
             user_input_requested_during_turn: AtomicBool::new(false),
             enrichment_task: Mutex::new(None),
             git_enrichment_complete: watch::channel(/*init*/ true).0,

@@ -747,6 +747,7 @@ impl Session {
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
+        turn_context.control().close().await;
         let last_agent_message = regular_output.and_then(|output| output.last_agent_message);
         pending_input.extend(
             self.input_queue
@@ -1036,6 +1037,15 @@ impl Session {
         turn_state: &Mutex<TurnState>,
         error: Option<ErrorEvent>,
     ) {
+        task.turn_context.control().close().await;
+        if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
+            self.services
+                .thread_extension_data
+                .insert(crate::turn_control::InterruptedTurn {
+                    turn_id: task.turn_context.sub_id.clone(),
+                    env: task.turn_context.turn_metadata_state.tool_env_snapshot(),
+                });
+        }
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())

@@ -1,6 +1,26 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "TurnInterruptMode": {
+      "enum": [
+        "immediate",
+        "safe"
+      ],
+      "type": "string"
+    }
+  },
   "properties": {
+    "mode": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TurnInterruptMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Omission retains the ordinary immediate interrupt behavior."
+    },
     "threadId": {
       "type": "string"
     },

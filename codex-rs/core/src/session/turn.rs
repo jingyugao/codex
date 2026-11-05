@@ -1934,6 +1934,7 @@ async fn run_sampling_request(
         let input_item_count = history.raw_items().len();
         let sampling_step_context = Arc::new(StepContext {
             sampled_through_sequence: Some(history.input_sequence()),
+            tool_env: turn_context.turn_metadata_state.tool_env_snapshot(),
             ..step_context.as_ref().clone()
         });
         let mut prompt_input = history
@@ -1997,7 +1998,9 @@ async fn run_sampling_request(
         };
         let mut draining_for_mailbox = false;
         let err = match try_run_sampling_request(
-            tool_runtime.clone(),
+            tool_runtime
+                .clone()
+                .with_step_context(Arc::clone(&sampling_step_context)),
             Arc::clone(&sess),
             sampling_step_context,
             Arc::clone(&turn_store),
@@ -2884,6 +2887,13 @@ async fn try_run_sampling_request(
     draining_for_mailbox: &mut bool,
 ) -> CodexResult<SamplingRequestResult> {
     let turn_context = Arc::clone(&step_context.turn);
+    let turn_control = turn_context.control();
+    let model_work = turn_control
+        .enter_model()
+        .or_cancel(&cancellation_token)
+        .await
+        .map_err(|_| CodexErr::TurnAborted)?
+        .ok_or(CodexErr::TurnAborted)?;
     feedback_tags!(
         model = step_context.settings.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy(),
@@ -3721,6 +3731,7 @@ async fn try_run_sampling_request(
     )
     .await;
 
+    model_work.finish_model(!in_flight.is_empty() || needs_follow_up);
     if !in_flight.is_empty() {
         let _tool_blocking_timing_guard = turn_context
             .turn_timing_state

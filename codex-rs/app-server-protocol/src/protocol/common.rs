@@ -1107,6 +1107,16 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnInterruptResponse,
     },
+    TurnControlRead => "turn/control/read" {
+        params: v2::TurnControlReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::TurnControlReadResponse,
+    },
+    TurnResume => "turn/resume" {
+        params: v2::TurnResumeParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::TurnResumeResponse,
+    },
     #[experimental("thread/realtime/start")]
     ThreadRealtimeStart => "thread/realtime/start" {
         params: v2::ThreadRealtimeStartParams,
@@ -2048,6 +2058,8 @@ server_notification_definitions! {
     ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    TurnPaused => "turn/paused" (v2::TurnPausedNotification),
+    TurnResumed => "turn/resumed" (v2::TurnResumedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
     HookCompleted => "hook/completed" (v2::HookCompletedNotification),

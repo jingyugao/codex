@@ -836,6 +836,16 @@
       ],
       "description": "Override the reasoning effort for this turn and subsequent turns."
     },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Replaces this turn's subprocess environment for subsequently captured model steps. Already captured model steps and running processes retain their previous values.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "input": {
       "items": {
         "$ref": "#/definitions/UserInput"

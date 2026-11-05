@@ -592,6 +592,7 @@ async fn interrupt_preserves_queue_and_queue_start_can_resume_a_non_head_item() 
         .request(|request_id| ClientRequest::TurnInterrupt {
             request_id,
             params: TurnInterruptParams {
+                mode: None,
                 thread_id: thread_id.clone(),
                 turn_id: active_turn_id,
             },
@@ -797,6 +798,7 @@ async fn queue_start_without_id_starts_the_head_when_idle() -> Result<()> {
         .request(|request_id| ClientRequest::TurnInterrupt {
             request_id,
             params: TurnInterruptParams {
+                mode: None,
                 thread_id: thread_id.clone(),
                 turn_id: active_turn_id,
             },
@@ -903,6 +905,7 @@ async fn a_new_turn_preserves_queued_messages_until_it_completes() -> Result<()>
         .request(|request_id| ClientRequest::TurnInterrupt {
             request_id,
             params: TurnInterruptParams {
+                mode: None,
                 thread_id: thread_id.clone(),
                 turn_id: active_turn_id,
             },

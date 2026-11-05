@@ -1074,6 +1074,7 @@ impl MessageProcessor {
             | ClientRequest::ThreadGuardianReview { .. }
             | ClientRequest::TurnStart { .. }
             | ClientRequest::TurnSteer { .. }
+            | ClientRequest::TurnResume { .. }
             | ClientRequest::ReviewStart { .. }
             | ClientRequest::ThreadCompactStart { .. }
             | ClientRequest::ThreadShellCommand { .. }
@@ -1789,6 +1790,14 @@ impl MessageProcessor {
                 self.turn_processor
                     .turn_interrupt(&request_id, params)
                     .await
+            }
+            ClientRequest::TurnControlRead { params, .. } => {
+                self.turn_processor
+                    .turn_control_read(&request_id, params)
+                    .await
+            }
+            ClientRequest::TurnResume { params, .. } => {
+                self.turn_processor.turn_resume(&request_id, params).await
             }
             ClientRequest::ThreadRealtimeStart { params, .. } => {
                 let sideband_base_url = None;

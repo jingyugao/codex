@@ -323,6 +323,7 @@ pub(crate) async fn run_temporary_structured_turn(
                     Uuid::new_v4()
                 )),
                 params: TurnInterruptParams {
+                    mode: None,
                     thread_id: thread_id.clone(),
                     turn_id,
                 },

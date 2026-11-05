@@ -1,0 +1,304 @@
+// Deterministic end-to-end verification against the real forked App Server.
+// Uses a controlled Responses endpoint; shell effects are real, model inference is not.
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import { createInterface } from 'node:readline';
+import { mkdtemp, mkdir, readFile, writeFile, access } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
+
+const root = await mkdtemp(join(tmpdir(), 'codex-turn-controls-'));
+for (const name of ['home', 'codex', 'workspace']) await mkdir(join(root, name));
+const workspace = join(root, 'workspace');
+const catalog = join(root, 'models.json');
+await writeFile(catalog, JSON.stringify({ models: [{
+  slug: 'fixture-model', display_name: 'Fixture', description: 'Controlled runtime verification',
+  default_reasoning_level: 'medium', supported_reasoning_levels: [], shell_type: 'unified_exec',
+  visibility: 'list', supported_in_api: true, priority: 0, availability_nux: null, upgrade: null,
+  experimental_supported_tools: ['send_user_message_async'], tool_mode: 'direct', input_modalities: ['text'],
+  support_verbosity: false, default_verbosity: null, apply_patch_tool_type: 'freeform',
+  web_search_tool_type: 'text_and_image', truncation_policy: { mode: 'tokens', limit: 10000 },
+  context_window: 128000, effective_context_window_percent: 95, supports_reasoning_summary_parameter: false,
+  base_instructions: 'You are an isolated runtime verification fixture.',
+}] }));
+let handler;
+let responses = 0;
+const requests = [];
+const stream = (response, type, data) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+function complete(response, items) {
+  const id = `response_${++responses}`;
+  response.writeHead(200, { 'content-type': 'text/event-stream' });
+  stream(response, 'response.created', { response: { id } });
+  items.forEach((item, index) => {
+    stream(response, 'response.output_item.added', { output_index: index, item });
+    stream(response, 'response.output_item.done', { output_index: index, item });
+  });
+  stream(response, 'response.completed', { response: { id, status: 'completed', output: items,
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
+  response.end();
+}
+const final = response => complete(response, [{ type: 'message', id: `msg_${responses}`,
+  role: 'assistant', content: [{ type: 'output_text', text: 'FIXTURE_DONE' }] }]);
+function execute(response, body, cmd, callId) {
+  const tools = body.tools.flatMap(tool => tool.type === 'namespace'
+    ? tool.tools.map(child => ({ ...child, namespace: tool.name })) : [tool]);
+  const tool = tools.find(tool => tool.name === 'exec_command');
+  assert(tool, 'Model request did not expose exec_command');
+  complete(response, [{ type: 'function_call', id: `fc_${callId}`, call_id: callId,
+    name: tool.name, ...(tool.namespace ? { namespace: tool.namespace } : {}),
+    arguments: JSON.stringify({ cmd, workdir: workspace, login: false, yield_time_ms: 1000 }) }]);
+}
+const server = createServer(async (request, response) => {
+  try {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks));
+    if (body.generate === false) { final(response); return; }
+    requests.push(body);
+    await handler(body, response);
+  } catch (error) {
+    console.error('FIXTURE_SERVER_ERROR', error.message);
+    response.writeHead(500).end();
+  }
+});
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const overrides = { model: 'fixture-model', model_catalog_json: catalog, model_provider: 'local_fixture',
+  'features.enable_request_compression': false, 'features.apps': false, 'features.memories': false,
+  'features.shell_snapshot': false,
+  'model_providers.local_fixture.name': 'Local verification fixture',
+  'model_providers.local_fixture.base_url': `http://127.0.0.1:${server.address().port}/v1`,
+  'model_providers.local_fixture.wire_api': 'responses',
+  'model_providers.local_fixture.requires_openai_auth': false };
+const binary = process.env.CODEX_FORK_BINARY || resolve(import.meta.dirname, '../codex-rs/target/debug/codex-app-server');
+const child = spawn(binary, Object.entries(overrides).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`]), {
+  cwd: workspace, env: { PATH: process.env.PATH, HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex'), TMPDIR: root },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let stderr = '';
+child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+const pending = new Map();
+const events = [];
+let sequence = 0;
+const lines = createInterface({ input: child.stdout });
+lines.on('line', line => {
+  const value = JSON.parse(line);
+  if (value.id !== undefined && pending.has(value.id)) {
+    const { resolve, reject, timer } = pending.get(value.id); pending.delete(value.id); clearTimeout(timer);
+    if (value.error) reject(Object.assign(new Error(value.error.message), { code: value.error.code }));
+    else resolve(value.result);
+  } else if (value.method && value.id === undefined) events.push(value);
+});
+function rpc(method, params) {
+  const id = ++sequence;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Timed out: ${method}`)); }, 20_000);
+    pending.set(id, { resolve, reject, timer });
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+}
+async function until(predicate) {
+  const deadline = Date.now() + 20_000;
+  while (!(await predicate())) {
+    if (Date.now() > deadline) throw new Error('Verification condition timed out');
+    if (child.exitCode !== null) throw new Error(`App Server exited: ${child.exitCode}`);
+    await delay(10);
+  }
+}
+const exists = path => access(join(workspace, path)).then(() => true, () => false);
+const event = (method, turnId) => events.find(item => item.method === method
+  && (item.params.turnId === turnId || item.params.turn?.id === turnId));
+const ended = async (turnId, status = 'completed') => {
+  await until(() => event('turn/completed', turnId));
+  const result = event('turn/completed', turnId);
+  assert.equal(result.params.turn.status, status);
+  return result;
+};
+const thread = async () => (await rpc('thread/start', { cwd: workspace, model: 'fixture-model',
+  approvalPolicy: 'never', sandbox: 'danger-full-access' })).thread.id;
+const start = async (threadId, text, env) => (await rpc('turn/start', { threadId,
+  input: [{ type: 'text', text }], ...(env === undefined ? {} : { env }) })).turn.id;
+const report = { binary, root, realModelCalls: 0, cases: [] };
+async function check(name, action) {
+  console.log(`START ${name}`);
+  const started = Date.now();
+  await action();
+  report.cases.push({ name, status: 'passed', durationMs: Date.now() - started });
+  console.log(`PASS ${name}`);
+}
+try {
+  await rpc('initialize', { clientInfo: { name: 'fork_verification', version: '1' }, capabilities: { experimentalApi: true } });
+  child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+
+  await check('env-start-steer-snapshot-and-new-turn-reset', async () => {
+    let firstResponse;
+    let count = 0;
+    handler = async (body, response) => {
+      count++;
+      if (count === 1) firstResponse = { body, response };
+      else if (count === 2) execute(response, body, `printf '%s' "$TRACE_MARKER" > second.trace`, 'env_second');
+      else final(response);
+    };
+    const id = await thread();
+    const turnId = await start(id, 'ENV_SNAPSHOT_TASK', { TRACE_MARKER: 'TRACE_A' });
+    await until(() => firstResponse);
+    await assert.rejects(rpc('turn/steer', { threadId: id, expectedTurnId: 'stale',
+      input: [{ type: 'text', text: 'rejected' }], env: { TRACE_MARKER: 'WRONG' } }));
+    execute(firstResponse.response, firstResponse.body,
+      'printf started > env-running.flag; sleep 0.5; printf \'%s\' "$TRACE_MARKER" > first.trace', 'env_first');
+    await until(() => exists('env-running.flag'));
+    await rpc('turn/steer', { threadId: id, expectedTurnId: turnId,
+      input: [{ type: 'text', text: 'Use the updated trace for the next step.' }], env: { TRACE_MARKER: 'TRACE_B' } });
+    await ended(turnId);
+    assert.equal(await readFile(join(workspace, 'first.trace'), 'utf8'), 'TRACE_A');
+    assert.equal(await readFile(join(workspace, 'second.trace'), 'utf8'), 'TRACE_B');
+    assert(!JSON.stringify(requests).includes('TRACE_A'), 'Environment values must stay out of model input');
+    assert(!JSON.stringify(requests).includes('TRACE_B'), 'Steered environment values must stay out of model input');
+    let resetCount = 0;
+    handler = async (body, response) => {
+      if (++resetCount === 1) execute(response, body, 'printf \'%s\' "${TRACE_MARKER-unset}" > reset.trace', 'env_reset');
+      else final(response);
+    };
+    const resetTurn = await start(id, 'NEW_TURN_WITHOUT_ENV');
+    await ended(resetTurn);
+    assert.equal(await readFile(join(workspace, 'reset.trace'), 'utf8'), 'unset');
+  });
+
+  await check('concurrent-threads-keep-environments-isolated', async () => {
+    const counts = new Map();
+    handler = async (body, response) => {
+      const marker = JSON.stringify(body.input).includes('CONCURRENT_ENV_A') ? 'A' : 'B';
+      const count = (counts.get(marker) || 0) + 1;
+      counts.set(marker, count);
+      if (count === 1) execute(response, body,
+        `sleep 0.2; printf '%s' "$TRACE_MARKER" > concurrent-${marker}.trace`, `concurrent_${marker}`);
+      else final(response);
+    };
+    const [threadA, threadB] = await Promise.all([thread(), thread()]);
+    const turns = await Promise.all([
+      start(threadA, 'CONCURRENT_ENV_A', { TRACE_MARKER: 'ONLY_A' }),
+      start(threadB, 'CONCURRENT_ENV_B', { TRACE_MARKER: 'ONLY_B' }),
+    ]);
+    await Promise.all(turns.map(turnId => ended(turnId)));
+    assert.equal(await readFile(join(workspace, 'concurrent-A.trace'), 'utf8'), 'ONLY_A');
+    assert.equal(await readFile(join(workspace, 'concurrent-B.trace'), 'utf8'), 'ONLY_B');
+  });
+
+  await check('safe-interrupt-before-tool-resume-same-turn-exactly-once', async () => {
+    let held;
+    let count = 0;
+    handler = async (body, response) => { if (++count === 1) held = { body, response }; else final(response); };
+    const id = await thread();
+    const turnId = await start(id, 'SAFE_INTERRUPT_TASK');
+    await until(() => held);
+    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
+    assert.equal((await rpc('turn/control/read', { threadId: id, turnId })).status, 'pauseRequested');
+    execute(held.response, held.body, 'printf x >> effect.txt', 'safe_effect');
+    await until(() => event('turn/paused', turnId));
+    assert.equal(await exists('effect.txt'), false);
+    assert.equal((await rpc('turn/control/read', { threadId: id, turnId })).status, 'paused');
+    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
+    assert.equal((await rpc('turn/resume', { threadId: id, turnId })).turnId, turnId);
+    await ended(turnId);
+    assert.equal(await readFile(join(workspace, 'effect.txt'), 'utf8'), 'x');
+    assert.equal(events.filter(item => item.method === 'turn/paused' && item.params.turnId === turnId).length, 1);
+    const resumed = events.indexOf(event('turn/resumed', turnId));
+    const toolStarted = events.findIndex(item => item.method === 'item/started' && item.params.turnId === turnId
+      && item.params.item?.type === 'commandExecution');
+    assert(resumed >= 0 && toolStarted > resumed, 'Tool start must follow resumed event');
+  });
+
+  await check('safe-interrupt-drains-running-tool', async () => {
+    let count = 0;
+    handler = async (body, response) => {
+      if (++count === 1) execute(response, body, 'printf started > running.flag; sleep 0.5; printf done > done.flag', 'drain_running');
+      else final(response);
+    };
+    const id = await thread();
+    const turnId = await start(id, 'DRAIN_RUNNING_TOOL_TASK');
+    await until(() => exists('running.flag'));
+    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
+    await until(() => event('turn/paused', turnId));
+    assert.equal(await exists('done.flag'), true);
+    assert.equal((await rpc('turn/resume', { threadId: id, turnId })).turnId, turnId);
+    await ended(turnId);
+  });
+
+  await check('ordinary-interrupt-resume-without-user-message', async () => {
+    let held;
+    let count = 0;
+    const initialRequest = requests.length;
+    handler = async (body, response) => {
+      if (++count === 1) held = { body, response };
+      else if (count === 2) execute(response, body, 'printf \'%s\' "$TRACE_MARKER" > resumed.trace', 'resumed_env');
+      else final(response);
+    };
+    const id = await thread();
+    const turnId = await start(id, 'ORIGINAL_INTERRUPTED_TASK', { TRACE_MARKER: 'RESUMED_TRACE' });
+    await until(() => held);
+    await rpc('turn/interrupt', { threadId: id, turnId });
+    await ended(turnId, 'interrupted');
+    const resumed = await rpc('turn/resume', { threadId: id, turnId });
+    assert.notEqual(resumed.turnId, turnId);
+    await ended(resumed.turnId);
+    assert.equal(await readFile(join(workspace, 'resumed.trace'), 'utf8'), 'RESUMED_TRACE');
+    const userText = (requests.at(-1).input || []).filter(item => item.role === 'user')
+      .map(item => JSON.stringify(item.content)).join('\n');
+    assert.equal(userText.split('ORIGINAL_INTERRUPTED_TASK').length - 1, 1);
+    assert(!userText.includes('继续'));
+    assert.equal(requests.length - initialRequest, 3);
+    assert.equal(event('turn/resumed', resumed.turnId), undefined);
+    await assert.rejects(rpc('turn/resume', { threadId: id, turnId }));
+    held.response.destroy();
+  });
+
+  await check('safe-pause-keeps-existing-background-process-alive', async () => {
+    let held;
+    let count = 0;
+    handler = async (body, response) => {
+      if (++count === 1) execute(response, body,
+        'printf started > background-started.flag; sleep 3; printf done > background-done.flag', 'background_process');
+      else if (count === 2) held = { body, response };
+      else final(response);
+    };
+    const id = await thread();
+    const turnId = await start(id, 'BACKGROUND_PROCESS_BOUNDARY_TASK');
+    await until(() => held);
+    assert.equal(await exists('background-done.flag'), false);
+    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
+    execute(held.response, held.body, 'printf resumed > after-background-resume.flag', 'after_background');
+    await until(() => event('turn/paused', turnId));
+    assert.equal(await exists('after-background-resume.flag'), false);
+    await until(() => exists('background-done.flag'));
+    assert.equal((await rpc('turn/control/read', { threadId: id, turnId })).status, 'paused');
+    await rpc('turn/resume', { threadId: id, turnId });
+    await ended(turnId);
+    assert.equal(await readFile(join(workspace, 'after-background-resume.flag'), 'utf8'), 'resumed');
+  });
+
+  await check('hard-interrupt-closes-a-paused-turn', async () => {
+    let held;
+    handler = async (body, response) => { held = { body, response }; };
+    const id = await thread();
+    const turnId = await start(id, 'CANCEL_PAUSED_TASK');
+    await until(() => held);
+    await rpc('turn/interrupt', { threadId: id, turnId, mode: 'safe' });
+    execute(held.response, held.body, 'printf forbidden > cancelled-effect.txt', 'cancelled_effect');
+    await until(() => event('turn/paused', turnId));
+    await rpc('turn/interrupt', { threadId: id, turnId });
+    await ended(turnId, 'interrupted');
+    assert.equal(await exists('cancelled-effect.txt'), false);
+  });
+  report.status = 'passed';
+} catch (error) {
+  report.status = 'failed'; report.error = { message: error.message, stack: error.stack };
+  console.error(error.message); process.exitCode = 1;
+} finally {
+  for (const { reject, timer } of pending.values()) { clearTimeout(timer); reject(new Error('Verification ended')); }
+  child.stdin.end(); child.kill('SIGTERM');
+  server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  await writeFile(join(root, 'report.json'), JSON.stringify(report, null, 2));
+  await writeFile(join(root, 'server.stderr.log'), stderr);
+  await writeFile(join(root, 'events.json'), JSON.stringify(events, null, 2));
+  console.log(JSON.stringify({ status: report.status, cases: report.cases.length, report: join(root, 'report.json') }));
+}

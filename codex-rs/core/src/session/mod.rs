@@ -4485,6 +4485,7 @@ impl Session {
         let (executor_hook_sources, mcp, tool_router, extension_data) = prepared_tools??;
         Ok(Arc::new(StepContext {
             sampled_through_sequence: None,
+            tool_env: turn_context.turn_metadata_state.tool_env_snapshot(),
             serving_assessment: None,
             preempt: turn_context
                 .config

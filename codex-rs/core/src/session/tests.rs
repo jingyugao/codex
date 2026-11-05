@@ -292,6 +292,7 @@ impl StepContext {
         });
         settings.service_tier = turn.config.service_tier.clone();
         Arc::new(Self {
+            tool_env: turn.turn_metadata_state.tool_env_snapshot(),
             sampled_through_sequence: None,
             preempt: turn
                 .config

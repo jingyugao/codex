@@ -462,6 +462,7 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
             .request(|request_id| ClientRequest::TurnInterrupt {
                 request_id,
                 params: TurnInterruptParams {
+                    mode: None,
                     thread_id: parent.id.clone(),
                     turn_id: started.turn.id.clone(),
                 },

@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "status": {
+      "description": "One of running, pauseRequested, paused, or resuming.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "TurnControlReadResponse",
+  "type": "object"
+}

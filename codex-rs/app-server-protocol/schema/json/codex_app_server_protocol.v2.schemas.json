@@ -3540,6 +3540,54 @@
             },
             "method": {
               "enum": [
+                "turn/control/read"
+              ],
+              "title": "Turn/control/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnControlReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/control/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "turn/resume"
+              ],
+              "title": "Turn/resumeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnResumeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/resumeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "review/start"
               ],
               "title": "Review/startRequestMethod",
@@ -17889,6 +17937,46 @@
           "properties": {
             "method": {
               "enum": [
+                "turn/paused"
+              ],
+              "title": "Turn/pausedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnPausedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/pausedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/resumed"
+              ],
+              "title": "Turn/resumedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnResumedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/resumedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "hook/started"
               ],
               "title": "Hook/startedNotificationMethod",
@@ -24886,6 +24974,37 @@
       "title": "TurnCompletedNotification",
       "type": "object"
     },
+    "TurnControlReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "title": "TurnControlReadParams",
+      "type": "object"
+    },
+    "TurnControlReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "description": "One of running, pauseRequested, paused, or resuming.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "TurnControlReadResponse",
+      "type": "object"
+    },
     "TurnDiffUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Notification that the turn-level unified diff has changed. Contains the latest aggregated diff across all file changes in the turn.",
@@ -24973,9 +25092,27 @@
       ],
       "type": "object"
     },
+    "TurnInterruptMode": {
+      "enum": [
+        "immediate",
+        "safe"
+      ],
+      "type": "string"
+    },
     "TurnInterruptParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnInterruptMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Omission retains the ordinary immediate interrupt behavior."
+        },
         "threadId": {
           "type": "string"
         },
@@ -25039,6 +25176,24 @@
       "title": "TurnModerationMetadataNotification",
       "type": "object"
     },
+    "TurnPausedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "description": "Pauses model/tool-call admission, not background processes from completed tool calls.",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "title": "TurnPausedNotification",
+      "type": "object"
+    },
     "TurnPlanStep": {
       "properties": {
         "status": {
@@ -25090,6 +25245,54 @@
         "turnId"
       ],
       "title": "TurnPlanUpdatedNotification",
+      "type": "object"
+    },
+    "TurnResumeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "title": "TurnResumeParams",
+      "type": "object"
+    },
+    "TurnResumeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "turnId": {
+          "description": "Safe resume retains the turn id and emits turn/resumed before admitting tools. An ordinary interrupted turn restarts with a new id and emits turn/started instead.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "title": "TurnResumeResponse",
+      "type": "object"
+    },
+    "TurnResumedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "title": "TurnResumedNotification",
       "type": "object"
     },
     "TurnStartParams": {
@@ -25150,6 +25353,16 @@
             }
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Replaces this turn's subprocess environment for subsequently captured model steps. Already captured model steps and running processes retain their previous values.",
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "input": {
           "items": {
@@ -25301,6 +25514,16 @@
         "clientUserMessageId": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Replaces the active turn's subprocess environment after accepting this input. Omitted/null preserves it; an empty map clears it. Captured steps are unchanged.",
+          "type": [
+            "object",
             "null"
           ]
         },

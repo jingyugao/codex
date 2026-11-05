@@ -1269,6 +1269,7 @@ impl TestAppServer {
     ) -> anyhow::Result<()> {
         let interrupt_request_id = self
             .send_turn_interrupt_request(TurnInterruptParams {
+                mode: None,
                 thread_id: thread_id.clone(),
                 turn_id: turn_id.clone(),
             })

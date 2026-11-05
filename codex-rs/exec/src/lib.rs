@@ -1252,6 +1252,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 ClientRequest::TurnStart {
                     request_id: request_ids.next(),
                     params: TurnStartParams {
+                        env: None,
                         disabled_plugin_ids: None,
                         thread_id: primary_thread_id_for_span.clone(),
                         turn_trigger: Some("exec".to_string()),
@@ -1336,6 +1337,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     ClientRequest::TurnInterrupt {
                         request_id: request_ids.next(),
                         params: TurnInterruptParams {
+                            mode: None,
                             thread_id: primary_thread_id_for_requests.clone(),
                             turn_id: task_id.clone(),
                         },

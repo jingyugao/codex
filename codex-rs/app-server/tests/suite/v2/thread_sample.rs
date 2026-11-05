@@ -286,6 +286,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
         assert_eq!(error.error.message, "sample source must be idle");
         let interrupt_id = client
             .send_turn_interrupt_request(TurnInterruptParams {
+                mode: None,
                 thread_id: parent.thread.id.clone(),
                 turn_id: started.turn.id,
             })

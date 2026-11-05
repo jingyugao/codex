@@ -6818,6 +6818,23 @@ class ToolExposureSurface(Enum):
     direct = "direct"
 
 
+class TurnControlReadParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class TurnControlReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    status: Annotated[
+        str, Field(description="One of running, pauseRequested, paused, or resuming.")
+    ]
+
+
 class TurnDiffUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6842,10 +6859,19 @@ class TurnEnvironmentParams(BaseModel):
     ] = None
 
 
+class TurnInterruptMode(Enum):
+    immediate = "immediate"
+    safe = "safe"
+
+
 class TurnInterruptParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    mode: Annotated[
+        TurnInterruptMode | None,
+        Field(description="Omission retains the ordinary immediate interrupt behavior."),
+    ] = None
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str, Field(alias="turnId")]
 
@@ -6871,10 +6897,53 @@ class TurnModerationMetadataNotification(BaseModel):
     turn_id: Annotated[str, Field(alias="turnId")]
 
 
+class TurnPausedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[
+        str,
+        Field(
+            alias="threadId",
+            description="Pauses model/tool-call admission, not background processes from completed tool calls.",
+        ),
+    ]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class TurnPlanStepStatus(Enum):
     pending = "pending"
     in_progress = "inProgress"
     completed = "completed"
+
+
+class TurnResumeParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class TurnResumeResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    turn_id: Annotated[
+        str,
+        Field(
+            alias="turnId",
+            description="Safe resume retains the turn id and emits turn/resumed before admitting tools. An ordinary interrupted turn restarts with a new id and emits turn/started instead.",
+        ),
+    ]
+
+
+class TurnResumedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
 
 
 class TurnStatus(Enum):
@@ -7930,6 +7999,24 @@ class TurnInterruptRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["turn/interrupt"], Field(title="Turn/interruptRequestMethod")]
     params: TurnInterruptParams
+
+
+class TurnControlReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["turn/control/read"], Field(title="Turn/control/readRequestMethod")]
+    params: TurnControlReadParams
+
+
+class TurnResumeRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["turn/resume"], Field(title="Turn/resumeRequestMethod")]
+    params: TurnResumeParams
 
 
 class ModelListRequest(BaseModel):
@@ -10058,6 +10145,36 @@ class ThreadProjectUpdatedServerNotification(BaseModel):
     params: ThreadProjectUpdatedNotification
 
 
+class TurnPausedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[Literal["turn/paused"], Field(title="Turn/pausedNotificationMethod")]
+    params: TurnPausedNotification
+
+
+class TurnResumedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[Literal["turn/resumed"], Field(title="Turn/resumedNotificationMethod")]
+    params: TurnResumedNotification
+
+
 class HookStartedServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11307,6 +11424,12 @@ class TurnSteerParams(BaseModel):
         populate_by_name=True,
     )
     client_user_message_id: Annotated[str | None, Field(alias="clientUserMessageId")] = None
+    env: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="Replaces the active turn's subprocess environment after accepting this input. Omitted/null preserves it; an empty map clears it. Captured steps are unchanged."
+        ),
+    ] = None
     expected_turn_id: Annotated[
         str,
         Field(
@@ -13453,6 +13576,12 @@ class TurnStartParams(BaseModel):
         ReasoningEffort | None,
         Field(description="Override the reasoning effort for this turn and subsequent turns."),
     ] = None
+    env: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="Replaces this turn's subprocess environment for subsequently captured model steps. Already captured model steps and running processes retain their previous values."
+        ),
+    ] = None
     input: list[UserInput]
     model: Annotated[
         str | None, Field(description="Override the model for this turn and subsequent turns.")
@@ -13621,6 +13750,8 @@ class ClientRequest(
         | TurnStartRequest
         | TurnSteerRequest
         | TurnInterruptRequest
+        | TurnControlReadRequest
+        | TurnResumeRequest
         | ReviewStartRequest
         | ModelListRequest
         | AccountGatewayOAuthReadRequest
@@ -13732,6 +13863,8 @@ class ClientRequest(
         | TurnStartRequest
         | TurnSteerRequest
         | TurnInterruptRequest
+        | TurnControlReadRequest
+        | TurnResumeRequest
         | ReviewStartRequest
         | ModelListRequest
         | AccountGatewayOAuthReadRequest
@@ -13974,6 +14107,8 @@ class ServerNotification(
         | ThreadSettingsUpdatedServerNotification
         | ThreadTokenUsageUpdatedServerNotification
         | TurnStartedServerNotification
+        | TurnPausedServerNotification
+        | TurnResumedServerNotification
         | HookStartedServerNotification
         | TurnCompletedServerNotification
         | HookCompletedServerNotification
@@ -14063,6 +14198,8 @@ class ServerNotification(
         | ThreadSettingsUpdatedServerNotification
         | ThreadTokenUsageUpdatedServerNotification
         | TurnStartedServerNotification
+        | TurnPausedServerNotification
+        | TurnResumedServerNotification
         | HookStartedServerNotification
         | TurnCompletedServerNotification
         | HookCompletedServerNotification

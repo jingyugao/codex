@@ -1505,3 +1505,57 @@ async fn turn_metadata_state_git_enrichment_cancellation_is_retryable_and_errors
     .expect("failed git enrichment should complete");
     assert!(invalid_state.current_workspaces().is_empty());
 }
+
+#[test]
+fn tool_environment_snapshots_are_isolated_per_step_and_turn() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let state = || {
+        TurnMetadataState::new(
+            "session-a".to_string(),
+            "thread-a".to_string(),
+            None,
+            None,
+            &SessionSource::Exec,
+            None,
+            "turn-a".to_string(),
+            temp_dir.path().abs(),
+            &PermissionProfile::read_only(),
+            WindowsSandboxLevel::Disabled,
+            false,
+            false,
+            &model_info_from_slug("gpt-5.4"),
+        )
+    };
+    let first_turn = state();
+    assert!(first_turn.tool_env_snapshot().0.is_empty());
+    first_turn.replace_tool_env(Some(codex_protocol::turn_input::ToolEnv(HashMap::from([
+        ("TRACE_ID".into(), "first".into()),
+    ]))));
+    let prior_step = first_turn.tool_env_snapshot();
+    first_turn.replace_tool_env(Some(codex_protocol::turn_input::ToolEnv(HashMap::from([
+        ("TRACE_ID".into(), "second".into()),
+    ]))));
+    assert_eq!(
+        prior_step.0.get("TRACE_ID").map(String::as_str),
+        Some("first")
+    );
+    assert_eq!(
+        first_turn
+            .tool_env_snapshot()
+            .0
+            .get("TRACE_ID")
+            .map(String::as_str),
+        Some("second")
+    );
+    first_turn.replace_tool_env(None);
+    assert_eq!(
+        first_turn
+            .tool_env_snapshot()
+            .0
+            .get("TRACE_ID")
+            .map(String::as_str),
+        Some("second")
+    );
+    let next_turn = state();
+    assert!(next_turn.tool_env_snapshot().0.is_empty());
+}

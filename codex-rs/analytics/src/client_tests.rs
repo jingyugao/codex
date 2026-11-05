@@ -625,6 +625,7 @@ fn sample_turn_steer_request() -> ClientRequest {
     ClientRequest::TurnSteer {
         request_id: RequestId::Integer(2),
         params: TurnSteerParams {
+            env: None,
             thread_id: "thread-1".to_string(),
             expected_turn_id: "turn-1".to_string(),
             client_user_message_id: None,
@@ -640,6 +641,7 @@ fn sample_turn_interrupt_request(turn_id: &str) -> ClientRequest {
     ClientRequest::TurnInterrupt {
         request_id: RequestId::Integer(3),
         params: TurnInterruptParams {
+            mode: None,
             thread_id: "thread-1".to_string(),
             turn_id: turn_id.to_string(),
         },

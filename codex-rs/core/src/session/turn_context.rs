@@ -426,6 +426,11 @@ enum TurnContextBuildMode {
 }
 
 impl TurnContext {
+    pub(crate) fn control(&self) -> Arc<crate::turn_control::TurnControl> {
+        self.extension_data
+            .get_or_init(crate::turn_control::TurnControl::default)
+    }
+
     /// Returns the resolved causal root for this admitted turn.
     pub(crate) fn root_turn_id(&self) -> String {
         self.turn_metadata_state

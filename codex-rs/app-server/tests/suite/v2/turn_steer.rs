@@ -66,6 +66,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
+            env: None,
             thread_id: thread.id.clone(),
             client_user_message_id: Some("client-steer-message-1".to_string()),
             input: vec![V2UserInput::Text {
@@ -102,6 +103,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
     let malformed_request = mcp
         .send_turn_steer_request(TurnSteerParams {
+            env: None,
             thread_id: thread.id,
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
@@ -215,6 +217,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
     let oversized_input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
+            env: None,
             thread_id: thread.id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
@@ -337,6 +340,7 @@ async fn turn_steer_returns_active_turn_id(tool_outputs: bool) -> Result<()> {
         .request(|request_id| ClientRequest::TurnSteer {
             request_id,
             params: TurnSteerParams {
+                env: None,
                 thread_id: thread.id.clone(),
                 client_user_message_id: Some("client-steer-message-1".to_string()),
                 input: vec![V2UserInput::Text {
@@ -522,6 +526,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
     )]));
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
+            env: None,
             thread_id: thread.id.clone(),
             client_user_message_id: None,
             input: Vec::new(),

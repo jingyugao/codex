@@ -1495,6 +1495,7 @@ impl UnifiedExecProcessManager {
         let shell_environment_policy = prepared.turn_environment.shell_environment_policy();
         let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
         let mut env = local_policy_env.clone();
+        env.extend(context.step_context.tool_env.0.clone());
         #[cfg(windows)]
         env.retain(|name, _| !name.eq_ignore_ascii_case(CODEX_THREAD_ID_ENV_VAR));
         env.insert(
@@ -1509,9 +1510,15 @@ impl UnifiedExecProcessManager {
         let mut env = apply_unified_exec_env(env);
         strip_output_env(&mut env);
         let mut explicit_env_overrides = shell_environment_policy.r#set.clone();
+        explicit_env_overrides.extend(context.step_context.tool_env.0.clone());
         strip_output_env(&mut explicit_env_overrides);
+        let mut turn_shell_policy = shell_environment_policy.clone();
+        turn_shell_policy
+            .r#set
+            .extend(context.step_context.tool_env.0.clone());
+        let exec_server_policy = exec_env_policy_from_shell_policy(&turn_shell_policy);
         let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(shell_environment_policy),
+            policy: exec_server_policy,
             local_policy_env,
         };
         let shell_snapshot = shell_snapshot_request(prepared, context);

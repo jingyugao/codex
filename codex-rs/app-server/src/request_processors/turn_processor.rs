@@ -5,6 +5,13 @@ use codex_app_server_protocol::ThreadGuardianAssessment;
 use codex_app_server_protocol::ThreadGuardianReviewParams;
 use codex_app_server_protocol::ThreadGuardianReviewResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::TurnControlReadParams;
+use codex_app_server_protocol::TurnControlReadResponse;
+use codex_app_server_protocol::TurnInterruptMode;
+use codex_app_server_protocol::TurnPausedNotification;
+use codex_app_server_protocol::TurnResumeParams;
+use codex_app_server_protocol::TurnResumeResponse;
+use codex_app_server_protocol::TurnResumedNotification;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -316,6 +323,70 @@ impl TurnRequestProcessor {
             self.track_error_response(request_id, error, /*error_type*/ None);
         }
         result.map(|response| response.map(Into::into))
+    }
+
+    pub(crate) async fn turn_control_read(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: TurnControlReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if params.turn_id.is_empty() {
+            return Err(invalid_request("turnId must not be empty"));
+        }
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
+        let status = thread
+            .turn_control_status(&params.turn_id)
+            .await
+            .map_err(|error| invalid_request(format!("failed to read turn control: {error}")))?;
+        Ok(Some(TurnControlReadResponse { status }.into()))
+    }
+
+    pub(crate) async fn turn_resume(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: TurnResumeParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if params.turn_id.is_empty() {
+            return Err(invalid_request("turnId must not be empty"));
+        }
+        let (thread_uuid, thread) = self.load_thread(&params.thread_id).await?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
+        self.config_manager
+            .check_thread_model_provider(thread.config().await.as_ref())
+            .await
+            .map_err(|error| config_load_error(&error))?;
+        let outcome = thread
+            .resume_turn(&params.turn_id)
+            .await
+            .map_err(|error| invalid_request(format!("failed to resume turn: {error}")))?;
+        let (turn_id, release) = match outcome {
+            codex_core::turn_control::TurnResumeOutcome::Paused(handle) => {
+                (params.turn_id, Some(handle))
+            }
+            codex_core::turn_control::TurnResumeOutcome::Restarted { turn_id } => (turn_id, None),
+        };
+        if let Some(handle) = release {
+            let connections = self
+                .thread_state_manager
+                .subscribed_connection_ids(thread_uuid)
+                .await;
+            if !connections.is_empty() {
+                self.outgoing
+                    .send_server_notification_to_connections(
+                        &connections,
+                        ServerNotification::TurnResumed(TurnResumedNotification {
+                            thread_id: params.thread_id,
+                            turn_id: turn_id.clone(),
+                        }),
+                    )
+                    .await;
+            }
+            handle.release().map_err(invalid_request)?;
+        }
+        Ok(Some(TurnResumeResponse { turn_id }.into()))
     }
 
     pub(crate) async fn thread_realtime_start(
@@ -702,6 +773,7 @@ impl TurnRequestProcessor {
                         ..Default::default()
                     })
                     .with_additional_context(additional_context)
+                    .with_tool_env(params.env)
                     .with_responses_metadata(params.responsesapi_client_metadata)
                     .with_responses_metadata_patch(params.responsesapi_client_metadata_patch)
                     .with_trace(self.request_trace_context(&request_id).await),
@@ -1128,6 +1200,7 @@ impl TurnRequestProcessor {
                     client_id: params.client_user_message_id,
                 })
                 .with_additional_context(additional_context)
+                .with_tool_env(params.env)
                 .with_responses_metadata(params.responsesapi_client_metadata)
                 .with_responses_metadata_patch(params.responsesapi_client_metadata_patch),
                 params.expected_turn_id,
@@ -1479,7 +1552,48 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
     ) -> Result<Option<TurnInterruptResponse>, JSONRPCErrorError> {
-        let TurnInterruptParams { thread_id, turn_id } = params;
+        let TurnInterruptParams {
+            thread_id,
+            turn_id,
+            mode,
+        } = params;
+        if mode.unwrap_or_default() == TurnInterruptMode::Safe {
+            if turn_id.is_empty() {
+                return Err(invalid_request(
+                    "turnId must not be empty for a safe interrupt",
+                ));
+            }
+            let (thread_uuid, thread) = self.load_thread(&thread_id).await?;
+            self.ensure_direct_input_allowed(request_id, thread.as_ref())
+                .await?;
+            let handle = thread
+                .request_safe_interrupt(&turn_id)
+                .await
+                .map_err(|error| invalid_request(format!("failed to pause turn: {error}")))?;
+            self.outgoing
+                .record_request_turn_id(request_id, &turn_id)
+                .await;
+            let outgoing = Arc::clone(&self.outgoing);
+            let state = self.thread_state_manager.clone();
+            tokio::spawn(async move {
+                if handle.wait_paused().await {
+                    let connections = state.subscribed_connection_ids(thread_uuid).await;
+                    if !connections.is_empty() {
+                        outgoing
+                            .send_server_notification_to_connections(
+                                &connections,
+                                ServerNotification::TurnPaused(TurnPausedNotification {
+                                    thread_id,
+                                    turn_id,
+                                }),
+                            )
+                            .await;
+                    }
+                    handle.mark_announced();
+                }
+            });
+            return Ok(Some(TurnInterruptResponse {}));
+        }
         let is_startup_interrupt = turn_id.is_empty();
 
         let (thread_uuid, thread) = self.load_thread(&thread_id).await?;

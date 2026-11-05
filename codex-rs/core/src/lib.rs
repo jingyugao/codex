@@ -34,6 +34,7 @@ pub use turn_metadata::detached_memory_responses_metadata;
 mod codex_thread;
 mod thread_input;
 pub use thread_input::InputWaitOutcome;
+pub mod turn_control;
 mod turn_extension_data;
 pub use turn_extension_data::WithTurnExtensionData;
 mod compact_model_fallback;
