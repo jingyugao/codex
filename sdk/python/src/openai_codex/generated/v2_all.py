@@ -6877,6 +6877,27 @@ class TurnPlanStepStatus(Enum):
     completed = "completed"
 
 
+class TurnResumeParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class TurnResumeResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    turn_id: Annotated[
+        str,
+        Field(
+            alias="turnId",
+            description="The new turn id; resuming an interrupted turn starts a new turn.",
+        ),
+    ]
+
+
 class TurnStatus(Enum):
     completed = "completed"
     interrupted = "interrupted"
@@ -7930,6 +7951,15 @@ class TurnInterruptRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["turn/interrupt"], Field(title="Turn/interruptRequestMethod")]
     params: TurnInterruptParams
+
+
+class TurnResumeRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["turn/resume"], Field(title="Turn/resumeRequestMethod")]
+    params: TurnResumeParams
 
 
 class ModelListRequest(BaseModel):
@@ -11307,6 +11337,12 @@ class TurnSteerParams(BaseModel):
         populate_by_name=True,
     )
     client_user_message_id: Annotated[str | None, Field(alias="clientUserMessageId")] = None
+    env: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="Replaces the active turn's subprocess environment after accepting this input. Omitted/null preserves it; an empty map clears it. Captured steps are unchanged."
+        ),
+    ] = None
     expected_turn_id: Annotated[
         str,
         Field(
@@ -13453,6 +13489,12 @@ class TurnStartParams(BaseModel):
         ReasoningEffort | None,
         Field(description="Override the reasoning effort for this turn and subsequent turns."),
     ] = None
+    env: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="Replaces this turn's subprocess environment for subsequently captured model steps. Already captured model steps and running processes retain their previous values."
+        ),
+    ] = None
     input: list[UserInput]
     model: Annotated[
         str | None, Field(description="Override the model for this turn and subsequent turns.")
@@ -13621,6 +13663,7 @@ class ClientRequest(
         | TurnStartRequest
         | TurnSteerRequest
         | TurnInterruptRequest
+        | TurnResumeRequest
         | ReviewStartRequest
         | ModelListRequest
         | AccountGatewayOAuthReadRequest
@@ -13732,6 +13775,7 @@ class ClientRequest(
         | TurnStartRequest
         | TurnSteerRequest
         | TurnInterruptRequest
+        | TurnResumeRequest
         | ReviewStartRequest
         | ModelListRequest
         | AccountGatewayOAuthReadRequest

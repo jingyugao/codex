@@ -315,6 +315,16 @@
         "null"
       ]
     },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Replaces the active turn's subprocess environment after accepting this input. Omitted/null preserves it; an empty map clears it. Captured steps are unchanged.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "expectedTurnId": {
       "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
       "type": "string"

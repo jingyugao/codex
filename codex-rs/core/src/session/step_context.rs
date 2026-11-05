@@ -27,6 +27,8 @@ pub(crate) struct StepContext {
     /// Final serving value for this invocation; retained by its code cell across waits.
     pub(crate) serving_assessment: Option<Arc<crate::guardian::ServingAssessment>>,
     pub(crate) turn: Arc<TurnContext>,
+    /// Frozen for this model step; omitted from model input and persisted history.
+    pub(crate) tool_env: codex_protocol::turn_input::ToolEnv,
     /// Preempts this request and yields its code-mode observations when user input arrives.
     pub(crate) preempt: Option<CancellationToken>,
     /// Realtime call activity and instructions captured for this sampling request.

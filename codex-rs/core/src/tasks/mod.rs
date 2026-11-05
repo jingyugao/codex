@@ -1146,6 +1146,16 @@ impl Session {
             });
         self.emit_turn_abort_lifecycle(reason.clone(), task.turn_context.extension_data.as_ref())
             .await;
+        // Publish only after joining the old task and finishing its history/hooks.
+        // Detached extension aborts can otherwise race a newly submitted resume.
+        if reason == TurnAbortReason::Interrupted && task.kind == TaskKind::Regular {
+            self.services
+                .thread_extension_data
+                .insert(crate::codex_thread::InterruptedTurn {
+                    turn_id: task.turn_context.sub_id.clone(),
+                    env: task.turn_context.turn_metadata_state.tool_env_snapshot(),
+                });
+        }
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             root_turn_id: Some(task.turn_context.root_turn_id()),
             turn_id: Some(task.turn_context.sub_id.clone()),

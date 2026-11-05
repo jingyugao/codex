@@ -6058,6 +6058,21 @@
         }
       ]
     },
+    "TurnResumeParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "TurnStartParams": {
       "properties": {
         "approvalPolicy": {
@@ -6115,6 +6130,16 @@
             }
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Replaces this turn's subprocess environment for subsequently captured model steps. Already captured model steps and running processes retain their previous values.",
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "input": {
           "items": {
@@ -6225,6 +6250,16 @@
         "clientUserMessageId": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Replaces the active turn's subprocess environment after accepting this input. Omitted/null preserves it; an empty map clears it. Captured steps are unchanged.",
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -8115,6 +8150,30 @@
         "params"
       ],
       "title": "Turn/interruptRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "turn/resume"
+          ],
+          "title": "Turn/resumeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TurnResumeParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Turn/resumeRequest",
       "type": "object"
     },
     {

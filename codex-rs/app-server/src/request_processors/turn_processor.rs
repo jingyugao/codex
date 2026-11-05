@@ -5,6 +5,8 @@ use codex_app_server_protocol::ThreadGuardianAssessment;
 use codex_app_server_protocol::ThreadGuardianReviewParams;
 use codex_app_server_protocol::ThreadGuardianReviewResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::TurnResumeParams;
+use codex_app_server_protocol::TurnResumeResponse;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -316,6 +318,28 @@ impl TurnRequestProcessor {
             self.track_error_response(request_id, error, /*error_type*/ None);
         }
         result.map(|response| response.map(Into::into))
+    }
+
+    pub(crate) async fn turn_resume(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: TurnResumeParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if params.turn_id.is_empty() {
+            return Err(invalid_request("turnId must not be empty"));
+        }
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
+        self.config_manager
+            .check_thread_model_provider(thread.config().await.as_ref())
+            .await
+            .map_err(|error| config_load_error(&error))?;
+        let turn_id = thread
+            .resume_turn(&params.turn_id)
+            .await
+            .map_err(|error| invalid_request(format!("failed to resume turn: {error}")))?;
+        Ok(Some(TurnResumeResponse { turn_id }.into()))
     }
 
     pub(crate) async fn thread_realtime_start(
@@ -702,6 +726,7 @@ impl TurnRequestProcessor {
                         ..Default::default()
                     })
                     .with_additional_context(additional_context)
+                    .with_tool_env(params.env)
                     .with_responses_metadata(params.responsesapi_client_metadata)
                     .with_responses_metadata_patch(params.responsesapi_client_metadata_patch)
                     .with_trace(self.request_trace_context(&request_id).await),
@@ -1128,6 +1153,7 @@ impl TurnRequestProcessor {
                     client_id: params.client_user_message_id,
                 })
                 .with_additional_context(additional_context)
+                .with_tool_env(params.env)
                 .with_responses_metadata(params.responsesapi_client_metadata)
                 .with_responses_metadata_patch(params.responsesapi_client_metadata_patch),
                 params.expected_turn_id,

@@ -12,6 +12,10 @@ import type { TurnToolOutput } from "./TurnToolOutput";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, /**
+ * Replaces this turn's subprocess environment for subsequently captured model steps.
+ * Already captured model steps and running processes retain their previous values.
+ */
+env?: { [key in string]?: string } | null, /**
  * Replace this thread's disabled plugin IDs.
  * Omitted/null preserves the list; [] clears it.
  */

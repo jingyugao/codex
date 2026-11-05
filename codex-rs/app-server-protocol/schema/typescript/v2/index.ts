@@ -655,6 +655,8 @@ export type { TurnModerationMetadataNotification } from "./TurnModerationMetadat
 export type { TurnPlanStep } from "./TurnPlanStep";
 export type { TurnPlanStepStatus } from "./TurnPlanStepStatus";
 export type { TurnPlanUpdatedNotification } from "./TurnPlanUpdatedNotification";
+export type { TurnResumeParams } from "./TurnResumeParams";
+export type { TurnResumeResponse } from "./TurnResumeResponse";
 export type { TurnStartParams } from "./TurnStartParams";
 export type { TurnStartResponse } from "./TurnStartResponse";
 export type { TurnStartedNotification } from "./TurnStartedNotification";

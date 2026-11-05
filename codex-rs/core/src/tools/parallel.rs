@@ -75,6 +75,11 @@ fn direct_path_supported(tool_name: &codex_tools::ToolName, source: &ToolCallSou
 }
 
 impl ToolCallRuntime {
+    pub(crate) fn with_step_context(mut self, step_context: Arc<StepContext>) -> Self {
+        self.step_context = step_context;
+        self
+    }
+
     pub(crate) fn new(
         session: Arc<Session>,
         step_context: Arc<StepContext>,

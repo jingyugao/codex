@@ -188,6 +188,12 @@ pub enum ConfigRefreshOutcome {
     Rejected,
 }
 
+/// Ephemeral state retained for ordinary interrupt/resume.
+pub(crate) struct InterruptedTurn {
+    pub(crate) turn_id: String,
+    pub(crate) env: codex_protocol::turn_input::ToolEnv,
+}
+
 pub use codex_guardian_context::GuardianRootMessage;
 
 pub use codex_guardian_reviewer::GuardianAuthorizationVersion;
@@ -303,6 +309,32 @@ impl CodexThread {
     /// Whether analytics is enabled for this thread after configuration and host overrides.
     pub fn analytics_enabled(&self) -> bool {
         self.session.services.analytics_events_client.is_enabled()
+    }
+
+    /// Restart an ordinary interrupted turn without adding a user message.
+    pub async fn resume_turn(&self, turn_id: &str) -> CodexResult<String> {
+        let interrupted = self
+            .session
+            .services
+            .thread_extension_data
+            .get::<InterruptedTurn>()
+            .filter(|saved| saved.turn_id == turn_id)
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest("no matching interrupted turn to resume".into())
+            })?;
+        let outcome = self
+            .continue_turn_if_idle(
+                TurnInputRequest::user_input(Vec::new())
+                    .with_tool_env(Some(interrupted.env.0.clone())),
+                turn_id.to_string(),
+            )
+            .await?;
+        match outcome {
+            TurnInputSubmission::Started { turn_id, .. } => Ok(turn_id),
+            _ => Err(CodexErr::InvalidRequest(
+                "thread changed before resume".into(),
+            )),
+        }
     }
 
     /// Looks up a live V2 tool invocation on a runtime with [`crate::HostToolInvocationLookup`].
@@ -576,7 +608,7 @@ impl CodexThread {
 
     /// Starts a new internal continuation turn when idle, including in Plan mode.
     /// Rejects if a newer task has started, even if it has already finished.
-    /// The input must be a response item; it is never treated as user authorization.
+    /// The input must be a response item or empty resume input; it never grants user authorization.
     pub async fn continue_turn_if_idle(
         &self,
         request: impl Into<WithTurnExtensionData<TurnInputRequest>>,

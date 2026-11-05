@@ -1312,6 +1312,7 @@ async fn realtime_timeline_splits_accepted_steering_and_persists_promoted_artifa
         let request = harness
             .mcp
             .send_turn_steer_request(TurnSteerParams {
+                env: None,
                 thread_id: harness.thread_id.clone(),
                 input,
                 expected_turn_id,
@@ -1342,6 +1343,7 @@ async fn realtime_timeline_splits_accepted_steering_and_persists_promoted_artifa
     let steering_request = harness
         .mcp
         .send_turn_steer_request(TurnSteerParams {
+            env: None,
             thread_id: harness.thread_id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Accepted steering".to_string(),

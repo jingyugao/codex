@@ -1934,6 +1934,7 @@ async fn run_sampling_request(
         let input_item_count = history.raw_items().len();
         let sampling_step_context = Arc::new(StepContext {
             sampled_through_sequence: Some(history.input_sequence()),
+            tool_env: turn_context.turn_metadata_state.tool_env_snapshot(),
             ..step_context.as_ref().clone()
         });
         let mut prompt_input = history
@@ -1997,7 +1998,9 @@ async fn run_sampling_request(
         };
         let mut draining_for_mailbox = false;
         let err = match try_run_sampling_request(
-            tool_runtime.clone(),
+            tool_runtime
+                .clone()
+                .with_step_context(Arc::clone(&sampling_step_context)),
             Arc::clone(&sess),
             sampling_step_context,
             Arc::clone(&turn_store),

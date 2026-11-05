@@ -3515,6 +3515,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
+                env: None,
                 disabled_plugin_ids: None,
                 environments: None,
                 thread_id: thread.id.clone(),
@@ -3567,6 +3568,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
+                env: None,
                 disabled_plugin_ids: None,
                 environments: Some(vec![TurnEnvironmentParams {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
@@ -4804,6 +4806,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
 
     let direct_steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
+            env: None,
             thread_id: child_thread_id.clone(),
             client_user_message_id: None,
             input: vec![V2UserInput::Text {

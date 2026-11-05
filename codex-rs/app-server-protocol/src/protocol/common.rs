@@ -1107,6 +1107,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnInterruptResponse,
     },
+    TurnResume => "turn/resume" {
+        params: v2::TurnResumeParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::TurnResumeResponse,
+    },
     #[experimental("thread/realtime/start")]
     ThreadRealtimeStart => "thread/realtime/start" {
         params: v2::ThreadRealtimeStartParams,

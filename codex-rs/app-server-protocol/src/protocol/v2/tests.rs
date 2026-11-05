@@ -5154,6 +5154,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     );
 
     let without_override = TurnStartParams {
+        env: None,
         disabled_plugin_ids: None,
         thread_id: "thread_123".to_string(),
         client_user_message_id: None,
@@ -5550,4 +5551,70 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
             path
         );
     }
+}
+
+#[test]
+fn turn_resume_and_env_preserve_wire_compatibility_and_redact_debug() {
+    let interrupt: TurnInterruptParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "turnId": "turn_123"
+    }))
+    .expect("legacy interrupt should deserialize");
+    assert_eq!(
+        serde_json::to_value(&interrupt).unwrap(),
+        json!({
+            "threadId": "thread_123", "turnId": "turn_123"
+        })
+    );
+    let resume: TurnResumeParams = serde_json::from_value(json!({
+        "threadId": "thread_123", "turnId": "turn_123"
+    }))
+    .expect("resume should deserialize");
+    assert_eq!(
+        serde_json::to_value(&resume).unwrap(),
+        json!({
+            "threadId": "thread_123", "turnId": "turn_123"
+        })
+    );
+    let response = TurnResumeResponse {
+        turn_id: "new_turn".to_string(),
+    };
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        json!({"turnId": "new_turn"})
+    );
+
+    let start: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123", "input": [],
+        "env": {"TRACEPARENT": "secret-value-567"}
+    }))
+    .expect("start env should deserialize");
+    let steer: TurnSteerParams = serde_json::from_value(json!({
+        "threadId": "thread_123", "expectedTurnId": "turn_123", "input": [],
+        "env": {"TRACEPARENT": "secret-value-567"}
+    }))
+    .expect("steer env should deserialize");
+    assert_eq!(
+        serde_json::to_value(&start).unwrap()["env"]["TRACEPARENT"],
+        "secret-value-567"
+    );
+    assert_eq!(
+        serde_json::to_value(&steer).unwrap()["env"]["TRACEPARENT"],
+        "secret-value-567"
+    );
+    for debug in [format!("{start:?}"), format!("{steer:?}")] {
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("TRACEPARENT"));
+        assert!(!debug.contains("secret-value-567"));
+    }
+    let legacy_start: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123", "input": []
+    }))
+    .unwrap();
+    let legacy_steer: TurnSteerParams = serde_json::from_value(json!({
+        "threadId": "thread_123", "expectedTurnId": "turn_123", "input": []
+    }))
+    .unwrap();
+    assert!(legacy_start.env.is_none());
+    assert!(legacy_steer.env.is_none());
 }

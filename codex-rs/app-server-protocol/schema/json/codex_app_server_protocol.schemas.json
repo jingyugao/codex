@@ -1796,6 +1796,30 @@
             },
             "method": {
               "enum": [
+                "turn/resume"
+              ],
+              "title": "Turn/resumeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnResumeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/resumeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "review/start"
               ],
               "title": "Review/startRequestMethod",
@@ -27389,6 +27413,37 @@
         "title": "TurnPlanUpdatedNotification",
         "type": "object"
       },
+      "TurnResumeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId"
+        ],
+        "title": "TurnResumeParams",
+        "type": "object"
+      },
+      "TurnResumeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnId": {
+            "description": "The new turn id; resuming an interrupted turn starts a new turn.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
+        "title": "TurnResumeResponse",
+        "type": "object"
+      },
       "TurnStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -27447,6 +27502,16 @@
               }
             ],
             "description": "Override the reasoning effort for this turn and subsequent turns."
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Replaces this turn's subprocess environment for subsequently captured model steps. Already captured model steps and running processes retain their previous values.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "input": {
             "items": {
@@ -27598,6 +27663,16 @@
           "clientUserMessageId": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Replaces the active turn's subprocess environment after accepting this input. Omitted/null preserves it; an empty map clears it. Captured steps are unchanged.",
+            "type": [
+              "object",
               "null"
             ]
           },

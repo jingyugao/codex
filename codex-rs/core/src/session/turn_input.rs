@@ -245,6 +245,10 @@ pub(super) async fn handle(
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
     let request = request.into();
+    if let Some(env) = &request.request.tool_env {
+        env.validate()
+            .map_err(|message| CodexErr::InvalidRequest(message.to_owned()))?;
+    }
     if let SubmittedTurnInput::ResponseItem(item)
     | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem { item, .. }) =
         &request.request.input
@@ -292,9 +296,13 @@ pub(super) async fn handle(
             if !matches!(
                 &request.request.input,
                 SubmittedTurnInput::ResponseItem(_) | SubmittedTurnInput::AnnotatedResponseItem(_)
+            ) && !matches!(
+                &request.request.input,
+                SubmittedTurnInput::UserInput { content, client_id: None } if content.is_empty()
             ) {
                 return Err(CodexErr::InvalidRequest(
-                    "continuation requires internal response input".to_string(),
+                    "continuation requires internal response input or empty resume input"
+                        .to_string(),
                 ));
             }
             start_if_idle(
@@ -387,6 +395,7 @@ async fn start_or_steer(
         start,
         additional_context,
         responsesapi_client_metadata,
+        tool_env,
         ..
     } = request;
     let has_explicit_input = match &input {
@@ -424,6 +433,7 @@ async fn start_or_steer(
             /*expected_turn_id*/ None,
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata.clone(),
+            tool_env.clone(),
             input_metadata.clone(),
         )
         .await
@@ -467,6 +477,7 @@ async fn start_or_steer(
             turn_context
                 .turn_metadata_state
                 .update_responsesapi_client_metadata(responsesapi_client_metadata);
+            turn_context.turn_metadata_state.replace_tool_env(tool_env);
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
@@ -518,6 +529,7 @@ async fn start_if_idle(
         start,
         additional_context,
         responsesapi_client_metadata,
+        tool_env,
         ..
     } = request;
     if session.input_queue.has_trigger_turn_mailbox_items().await {
@@ -617,6 +629,7 @@ async fn start_if_idle(
     turn_context
         .turn_metadata_state
         .update_responsesapi_client_metadata(responsesapi_client_metadata);
+    turn_context.turn_metadata_state.replace_tool_env(tool_env);
     session
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
@@ -686,6 +699,7 @@ async fn steer(
         start,
         additional_context,
         responsesapi_client_metadata,
+        tool_env,
         ..
     } = request;
     if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
@@ -710,6 +724,7 @@ async fn steer(
             Some(expected_turn_id.as_str()),
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata,
+            tool_env,
             input_metadata,
         )
         .await
@@ -899,6 +914,7 @@ impl Session {
         expected_turn_id: Option<&str>,
         required_final_output_json_schema: Option<&Value>,
         responsesapi_client_metadata: ResponsesApiClientMetadataUpdate,
+        tool_env: Option<codex_protocol::turn_input::ToolEnv>,
         input_metadata: UserInputMetadata,
     ) -> Result<(String, String), NotSubmittedReason> {
         let mut active = self.active_turn.lock().await;
@@ -953,6 +969,10 @@ impl Session {
             .turn_context
             .turn_metadata_state
             .update_responsesapi_client_metadata(responsesapi_client_metadata);
+        active_task
+            .turn_context
+            .turn_metadata_state
+            .replace_tool_env(tool_env);
 
         let input = match input {
             SubmittedTurnInput::UserInput { content, client_id } => TurnInput::UserInput {
