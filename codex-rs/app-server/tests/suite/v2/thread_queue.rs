@@ -272,6 +272,7 @@ async fn queue_list_returns_ordered_pages_and_lightweight_notifications() -> Res
         &mut app,
         ThreadQueueAddParams {
             thread_id: thread_id.clone(),
+            env: None,
             input: vec![text(&"x".repeat(64 * 1024))],
             client_user_message_id: "oversized-snapshot".to_string(),
         },
@@ -376,6 +377,7 @@ async fn idle_queue_dispatch_preserves_client_id() -> Result<()> {
         .id;
     let queued_submission = ThreadQueueAddParams {
         thread_id: thread_id.clone(),
+        env: None,
         input: vec![text("durable queued message")],
         client_user_message_id: "stable-queued-client-id".to_string(),
     };
@@ -1057,6 +1059,7 @@ async fn decline_approval(app: &mut TestAppServer, request_id: RequestId) -> Res
 fn submission(thread_id: &str, value: &str) -> ThreadQueueAddParams {
     ThreadQueueAddParams {
         thread_id: thread_id.to_string(),
+        env: None,
         input: vec![text(value)],
         client_user_message_id: format!("queued-{value}"),
     }

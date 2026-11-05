@@ -25,12 +25,15 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadQueueChangedEvent;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::turn_input::ToolEnv;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::MAX_QUEUE_ITEMS;
 use codex_thread_store::QueueStore;
 use codex_thread_store::QueuedUserSubmissionRecord;
 use codex_thread_store::ThreadStoreError;
+use serde::Deserialize;
+use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
@@ -42,6 +45,28 @@ use uuid::Uuid;
 pub struct QueuedItem {
     pub id: String,
     pub input: TurnInput,
+    pub tool_env: Option<ToolEnv>,
+}
+
+// Keep legacy payloads readable, and keep env outside conversation input/history.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum QueuedInputPayload {
+    WithEnv {
+        input: TurnInput,
+        env: HashMap<String, String>,
+    },
+    Legacy(TurnInput),
+}
+
+fn encode_queued_input(
+    input: TurnInput,
+    tool_env: Option<ToolEnv>,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&match tool_env {
+        Some(ToolEnv(env)) => QueuedInputPayload::WithEnv { input, env },
+        None => QueuedInputPayload::Legacy(input),
+    })
 }
 
 #[derive(Debug, Error)]
@@ -56,6 +81,8 @@ pub enum QueueServiceError {
     CoreSubmissionError(#[from] CodexErr),
     #[error("only user input can be added to the user-message queue")]
     InvalidInput,
+    #[error("{0}")]
+    InvalidEnvironment(&'static str),
     #[error(
         "queued user input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters ({actual_chars} provided)"
     )]
@@ -267,8 +294,21 @@ impl QueuedItemService {
         thread_id: ThreadId,
         input: TurnInput,
     ) -> Result<QueuedItem, QueueServiceError> {
+        self.enqueue_with_env(thread_id, input, None).await
+    }
+
+    pub async fn enqueue_with_env(
+        &self,
+        thread_id: ThreadId,
+        input: TurnInput,
+        tool_env: Option<ToolEnv>,
+    ) -> Result<QueuedItem, QueueServiceError> {
+        if let Some(env) = &tool_env {
+            env.validate()
+                .map_err(QueueServiceError::InvalidEnvironment)?;
+        }
         let input = prepare_queued_user_input(input).await?;
-        let payload = serde_json::to_string(&input)?;
+        let payload = encode_queued_input(input, tool_env)?;
         let item = {
             let _dispatch_guard = self.dispatch_guard(thread_id).await;
             let item = queued_item_from_record(self.queue.enqueue(thread_id, payload).await?)?;
@@ -305,21 +345,19 @@ impl QueuedItemService {
         mut input: TurnInput,
     ) -> Result<Option<QueuedItem>, QueueServiceError> {
         let _dispatch_guard = self.dispatch_guard(thread_id).await;
+        let existing = self
+            .list(thread_id)
+            .await?
+            .into_iter()
+            .find(|item| item.id == queued_item_id);
         if let TurnInput::UserInput { client_id, .. } = &mut input {
-            *client_id = self
-                .list(thread_id)
-                .await?
-                .into_iter()
-                .find_map(|item| match item {
-                    QueuedItem {
-                        id,
-                        input: TurnInput::UserInput { client_id, .. },
-                    } if id == queued_item_id => client_id,
-                    _ => None,
-                });
+            *client_id = existing.as_ref().and_then(|item| match &item.input {
+                TurnInput::UserInput { client_id, .. } => client_id.clone(),
+                _ => None,
+            });
         }
         let input = prepare_queued_user_input(input).await?;
-        let payload = serde_json::to_string(&input)?;
+        let payload = encode_queued_input(input, existing.and_then(|item| item.tool_env))?;
         let item = self
             .queue
             .update(thread_id, queued_item_id, payload)
@@ -389,12 +427,15 @@ impl QueuedItemService {
             return Err(QueueServiceError::InvalidInput);
         };
         let submission = thread
-            .start_turn_if_idle(TurnInputRequest::new(input).with_trace(trace).on_start(
-                TurnStartOptions {
-                    turn_trigger: Some("queue".to_string()),
-                    ..Default::default()
-                },
-            ))
+            .start_turn_if_idle(
+                TurnInputRequest::new(input)
+                    .with_tool_env(item.tool_env.map(|env| env.0))
+                    .with_trace(trace)
+                    .on_start(TurnStartOptions {
+                        turn_trigger: Some("queue".to_string()),
+                        ..Default::default()
+                    }),
+            )
             .await?;
         if matches!(submission, StartIfIdleSubmission::Started { .. }) {
             self.delete_locked(thread_id, queued_item_id).await?;
@@ -422,14 +463,15 @@ impl QueuedItemService {
             };
             let queued_item_id = record.id.clone();
 
-            let input = match serde_json::from_str::<TurnInput>(&record.payload) {
-                Ok(input) => input,
+            let item = match queued_item_from_record(record) {
+                Ok(item) => item,
                 Err(error) => {
                     tracing::warn!(%queued_item_id, %error, "discarding invalid queued item");
                     self.delete_locked(thread_id, queued_item_id).await?;
                     continue;
                 }
             };
+            let input = item.input;
             if !matches!(input, TurnInput::UserInput { .. }) {
                 tracing::warn!(%queued_item_id, "discarding non-user queued input");
                 self.delete_locked(thread_id, queued_item_id).await?;
@@ -437,10 +479,14 @@ impl QueuedItemService {
             }
 
             match thread
-                .start_turn_if_idle(TurnInputRequest::new(input).on_start(TurnStartOptions {
-                    turn_trigger: Some("queue".to_string()),
-                    ..Default::default()
-                }))
+                .start_turn_if_idle(
+                    TurnInputRequest::new(input)
+                        .with_tool_env(item.tool_env.map(|env| env.0))
+                        .on_start(TurnStartOptions {
+                            turn_trigger: Some("queue".to_string()),
+                            ..Default::default()
+                        }),
+                )
                 .await
             {
                 Ok(StartIfIdleSubmission::Started { .. }) => {
@@ -569,8 +615,18 @@ where
 fn queued_item_from_record(
     record: QueuedUserSubmissionRecord,
 ) -> Result<QueuedItem, QueueServiceError> {
+    let (input, tool_env) = match serde_json::from_str::<QueuedInputPayload>(&record.payload)? {
+        QueuedInputPayload::WithEnv { input, env } => {
+            let env = ToolEnv(env);
+            env.validate()
+                .map_err(QueueServiceError::InvalidEnvironment)?;
+            (input, Some(env))
+        }
+        QueuedInputPayload::Legacy(input) => (input, None),
+    };
     Ok(QueuedItem {
         id: record.id,
-        input: serde_json::from_str::<TurnInput>(&record.payload)?,
+        input,
+        tool_env,
     })
 }

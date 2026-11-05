@@ -31,6 +31,7 @@ use codex_core::TurnInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::turn_input::ToolEnv;
 use codex_queue_extension::QueueServiceError;
 use codex_queue_extension::QueuedItem;
 use codex_queue_extension::QueuedItemService;
@@ -83,9 +84,10 @@ impl ThreadQueueRequestProcessor {
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let queued_item = self
             .service()?
-            .enqueue(
+            .enqueue_with_env(
                 thread_id,
                 submission_into_turn_input(params.input, Some(params.client_user_message_id)),
+                params.env.map(ToolEnv),
             )
             .await
             .map_err(queue_error)?;
@@ -327,9 +329,9 @@ pub(super) fn queue_error(error: QueueServiceError) -> JSONRPCErrorError {
         QueueServiceError::InputTooLarge { actual_chars } => {
             TurnRequestProcessor::input_too_large_error(actual_chars)
         }
-        error @ (QueueServiceError::InvalidInput | QueueServiceError::InvalidAttachment(_)) => {
-            invalid_request(error.to_string())
-        }
+        error @ (QueueServiceError::InvalidInput
+        | QueueServiceError::InvalidAttachment(_)
+        | QueueServiceError::InvalidEnvironment(_)) => invalid_request(error.to_string()),
         QueueServiceError::Storage(ThreadStoreError::InvalidRequest { message }) => {
             invalid_request(message)
         }

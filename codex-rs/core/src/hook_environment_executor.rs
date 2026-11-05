@@ -19,6 +19,7 @@ use codex_hooks::HookEnvironmentExecutor;
 use codex_hooks::Hooks;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::turn_input::ToolEnv;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 
@@ -44,6 +45,7 @@ pub(crate) fn with_environment_hooks(
         turn,
         environments,
         /*target_environments*/ &[],
+        &turn.turn_metadata_state.tool_env_snapshot(),
     )
 }
 
@@ -52,15 +54,20 @@ pub(crate) fn with_tool_environment_hooks(
     turn: &Arc<TurnContext>,
     environments: &TurnEnvironmentSnapshot,
     target_environments: &[&str],
+    tool_env: &ToolEnv,
 ) -> Hooks {
-    session.hooks().with_environment_hooks(
-        environment_hook_sources(environments, target_environments),
-        Arc::new(EnvironmentCommandExecutor {
-            environments: environments.clone(),
-            session: Arc::clone(session),
-            turn: Arc::clone(turn),
-        }),
-    )
+    session
+        .hooks()
+        .with_command_env(&tool_env.0)
+        .with_environment_hooks(
+            environment_hook_sources(environments, target_environments),
+            Arc::new(EnvironmentCommandExecutor {
+                environments: environments.clone(),
+                session: Arc::clone(session),
+                turn: Arc::clone(turn),
+                tool_env: tool_env.clone(),
+            }),
+        )
 }
 
 pub(crate) fn environment_hook_sources(
@@ -86,6 +93,7 @@ struct EnvironmentCommandExecutor {
     environments: TurnEnvironmentSnapshot,
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    tool_env: ToolEnv,
 }
 
 impl EnvironmentCommandExecutor {
@@ -120,14 +128,16 @@ impl EnvironmentCommandExecutor {
             sandbox.permissions = PermissionProfile::Disabled;
             sandbox
         });
+        let mut shell_environment_policy = environment.shell_environment_policy().clone();
+        shell_environment_policy
+            .r#set
+            .extend(self.tool_env.0.clone());
         let params = ExecParams {
             process_id,
             metadata: None,
             argv,
             cwd: environment.cwd().clone(),
-            env_policy: Some(exec_env_policy_from_shell_policy(
-                environment.shell_environment_policy(),
-            )),
+            env_policy: Some(exec_env_policy_from_shell_policy(&shell_environment_policy)),
             shell_snapshot: None,
             env,
             tty: false,

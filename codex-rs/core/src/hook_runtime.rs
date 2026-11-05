@@ -222,6 +222,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         turn_context,
         &step_context.environments,
         target_environments,
+        &step_context.tool_env,
     );
     let preview_runs = hooks.preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -298,6 +299,7 @@ pub(crate) async fn run_permission_request_hooks(
         turn_context,
         review_context.environments(),
         &[target_environment],
+        review_context.tool_env(),
     );
     let preview_runs = hooks.preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -343,6 +345,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         turn_context,
         &step_context.environments,
         target_environments,
+        &step_context.tool_env,
     );
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -515,7 +518,10 @@ pub(crate) async fn run_turn_interrupt_hooks(
     let hooks = last_known_step_context
         .as_deref()
         .map_or_else(
-            || (*sess.hooks()).clone(),
+            || {
+                sess.hooks()
+                    .with_command_env(&turn_context.turn_metadata_state.tool_env_snapshot().0)
+            },
             |step| with_environment_hooks(sess, &step.turn, &step.environments),
         )
         .with_executor_hooks(executor_hook_sources);
@@ -1120,12 +1126,15 @@ pub(crate) fn hooks_for_model_request(
         | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => Arc::new(
             session
                 .hooks()
-                .for_memory_consolidation(step.executor_hook_sources.clone()),
+                .for_memory_consolidation(step.executor_hook_sources.clone())
+                .with_command_env(&step.tool_env.0),
         ),
-        _ => Arc::new(with_environment_hooks(
+        _ => Arc::new(with_tool_environment_hooks(
             session,
             &step.turn,
             &step.environments,
+            &[],
+            &step.tool_env,
         )),
     }
 }

@@ -112,6 +112,31 @@ impl CommandHookRuntime {
         }
     }
 
+    pub(crate) fn with_command_env(&self, overrides: &HashMap<String, String>) -> Self {
+        let mut environment = self.environment.as_ref().clone();
+        environment.retain(|(key, _)| {
+            !overrides.keys().any(|name| {
+                #[cfg(windows)]
+                {
+                    key.to_str()
+                        .is_some_and(|key| key.eq_ignore_ascii_case(name))
+                }
+                #[cfg(not(windows))]
+                {
+                    key == OsStr::new(name)
+                }
+            })
+        });
+        environment.extend(
+            overrides
+                .iter()
+                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+        let mut runtime = self.clone();
+        runtime.environment = Arc::new(environment);
+        runtime
+    }
+
     pub(crate) fn output_spiller(&self) -> &HookOutputSpiller {
         &self.output_spiller
     }

@@ -4,8 +4,9 @@
 
 | 接口 | 能力 |
 | --- | --- |
-| `turn/start` | 接收 `env`，为该 turn 启动的工具子进程设置变量 |
+| `turn/start` | 接收 `env`，为该 turn 启动的工具与 command hook 子进程设置变量 |
 | `turn/steer` | 接收 `env`，替换当前 turn 后续模型步骤使用的变量 |
+| `thread/queue/add` | 接收 `env`，随排队输入保存，在该输入启动新 turn 时应用 |
 | `turn/interrupt` | 沿用原有立即中断 |
 | `turn/resume` | 基于已有历史启动新的 turn，无需发送“继续”消息 |
 
@@ -61,13 +62,28 @@ turn ID 取自 `result.turn.id`。该 turn 的 `exec_command` 子进程可以读
 | steer 省略 `env` 或传 `null` | 保留当前临时映射 |
 | 传入对象 | 整体替换临时映射；`{}` 清空覆盖，同名基础变量可能重新显现 |
 | 模型步骤已捕获快照 | 该步骤的工具使用旧快照；之后捕获的步骤使用更新后的映射 |
+| 工具的 PreToolUse、PostToolUse hook | 使用对应工具步骤捕获的 env 快照，steer 不改变已有步骤 |
+| 模型请求 hook、工具审批的 PermissionRequest hook | 使用发起请求的步骤快照 |
+| UserPromptSubmit、Stop、Interrupt 等 turn 级 hook | 使用触发时的当前 turn env；异步 hook 保留调度时的快照 |
 | 子进程已启动 | 进程已有环境不会改变 |
 | 多个线程并发 | 各 turn 独立保存映射，不修改 App Server 全局环境 |
 | 普通中断后恢复 | 新 turn 使用被中断 turn 的临时映射 |
 
 键和值必须为字符串，最多 64 项，键值 UTF-8 字节总数不超过 65,536。键不能为空，不能包含 `=` 或 NUL；值不能包含 NUL。禁止覆盖 `CODEX_THREAD_ID`、`CODEX_TOOL_CALL_ID`、`CODEX_SESSION_ID`，名称比较不区分大小写。
 
-映射只保存在内存中，不作为配置写入会话历史或提示词；Debug 输出对映射脱敏。如果工具主动打印变量，其输出仍可能进入历史和模型上下文。接线覆盖 unified exec 的子进程，不会自动向已经启动的 MCP 服务或客户端 dynamic tool 注入变量。
+本地 command hook 的基础环境来自 App Server 启动环境，远程 command hook 的基础环境来自对应执行环境的 shell 策略；之后叠加 turn env，hook 内部设置的变量优先，仍执行原有受限变量过滤。工具 shell 中临时执行的 `export` 不会回传给后续 hook；需要传递的 trace 变量应通过上述 `env` 字段设置。
+
+`turn/start` 和 `turn/steer` 的映射只保存在内存中；排队输入的映射随队列项持久化，启动后从队列移除。映射不作为配置写入会话历史或提示词，Debug 输出对映射脱敏。如果工具主动打印变量，其输出仍可能进入历史和模型上下文。接线覆盖 unified exec、在本地或远程环境运行的 command hook。legacy notify、MCP hook、已启动的 MCP 服务和客户端 dynamic tool 不会自动接收此映射；没有关联 turn 的 SessionEnd hook 不继承上一 turn 的映射。
+
+### 排队输入
+
+初始化客户端时需声明 `capabilities.experimentalApi: true`，沿用原生队列接口的要求：
+
+```json
+{"jsonrpc":"2.0","id":12,"method":"thread/queue/add","params":{"threadId":"THREAD_ID","input":[{"type":"text","text":"运行下一项检查"}],"clientUserMessageId":"queued-message-001","env":{"TRACE_ID":"trace-queued"}}}
+```
+
+入队不改变活跃 turn 的 env。自动出队和 `thread/queue/start` 都将该队列项的 env 应用到新 turn 的工具和 command hook；省略或传 `null` 表示新 turn 无临时覆盖，`{}` 也表示空覆盖，不继承前一 turn。`thread/queue/update` 只编辑输入并保留该项 env。入队时使用相同的 env 校验规则，非法 env 不写入队列；旧版队列项按无 env 读取。add/list 等响应仍保持原有结构，不回显 env。
 
 ## 立即中断后续跑
 
@@ -102,6 +118,10 @@ node scripts/verify-turn-controls.mjs
 1. start/steer 的 env、旧步骤快照、过期 steer 拒绝，以及新 turn 清空映射。
 2. 并发线程环境变量隔离。
 3. 普通中断后自动续跑、保留 env、不添加“继续”消息，以及拒绝再次恢复旧 turn。
+
+脚本同时检查本地 `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`Interrupt` command hooks 对 turn env 和基础环境的读取、线程隔离，以及异步 hook 的 env 快照。
+
+另外两项队列回归覆盖自动派发、更新输入保留 env、非法 env 拒绝、队列项隔离，以及中断后指定队列项启动。队列服务测试覆盖 env 保存后重新加载、旧记录兼容及编辑保留 env。
 
 脚本输出临时目录内的 `report.json` 路径，并保留通知记录和服务端 stderr。它不验证真实模型能力或远端 exec-server 连接；实际结果以本次运行报告为准。
 

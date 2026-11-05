@@ -387,6 +387,65 @@ async fn command_hook_does_not_expose_configured_noise_auth_token() {
 }
 
 #[tokio::test]
+async fn command_env_snapshots_are_isolated_and_preserve_hook_overrides() {
+    let temp = tempdir().expect("create temp dir");
+    let mut environment = std::env::vars_os().collect::<Vec<_>>();
+    environment.retain(|(key, _)| key != "CODEX_HOOK_TRACE" && key != "CODEX_HOOK_PRIORITY");
+    environment.push((OsString::from("CODEX_HOOK_TRACE"), OsString::from("base")));
+    #[cfg(unix)]
+    environment.push((
+        OsString::from("CODEX_HOOK_NON_UNICODE"),
+        OsString::from_vec(vec![b'v', 0xff]),
+    ));
+    let (base, _receiver) = runtime_with_environment(Arc::new(environment));
+    let overrides = |trace: &str| {
+        HashMap::from([
+            ("CODEX_HOOK_TRACE".to_string(), trace.to_string()),
+            ("CODEX_HOOK_PRIORITY".to_string(), "turn".to_string()),
+            (
+                CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR.to_string(),
+                "must-not-leak".to_string(),
+            ),
+        ])
+    };
+    let first = base.with_command_env(&overrides("first"));
+    let second = base.with_command_env(&overrides("second"));
+    assert!(Arc::ptr_eq(&base.state, &first.state));
+    assert!(Arc::ptr_eq(&base.state, &second.state));
+    assert!(!Arc::ptr_eq(&base.environment, &first.environment));
+    #[cfg(unix)]
+    assert!(first.environment.iter().any(|(key, value)| {
+        key == "CODEX_HOOK_NON_UNICODE" && *value == OsString::from_vec(vec![b'v', 0xff])
+    }));
+
+    let command = if cfg!(windows) { "set" } else { "env" };
+    let hook_env = HashMap::from([("CODEX_HOOK_PRIORITY".to_string(), "hook".to_string())]);
+    let handler = write_handler(&temp, "");
+    let (a, b, original) = tokio::join!(
+        run_command(&first, &handler, command, &hook_env, "{}", temp.path()),
+        run_command(&second, &handler, command, &hook_env, "{}", temp.path()),
+        run_command(&base, &handler, command, &hook_env, "{}", temp.path()),
+    );
+    for (result, expected) in [(&a, "first"), (&b, "second"), (&original, "base")] {
+        assert_eq!(result.exit_code, Some(0), "stderr: {}", result.stderr);
+        assert!(
+            result
+                .stdout
+                .lines()
+                .any(|line| line == format!("CODEX_HOOK_TRACE={expected}"))
+        );
+        assert!(
+            result
+                .stdout
+                .lines()
+                .any(|line| line == "CODEX_HOOK_PRIORITY=hook")
+        );
+        assert!(!result.stdout.contains("must-not-leak"));
+        assert_eq!(result.error, None);
+    }
+}
+
+#[tokio::test]
 async fn build_command_replays_snapshot_before_hook_overrides_and_scrubbing() {
     #[cfg(unix)]
     let non_unicode_value = OsString::from_vec(vec![b'v', 0xff]);
