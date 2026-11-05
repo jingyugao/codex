@@ -97,6 +97,7 @@ pub(crate) struct GuardianReviewContext {
     turn: Arc<TurnContext>,
     review_execution: Option<codex_direct_tool_timing::ReviewExecution>,
     environments: TurnEnvironmentSnapshot,
+    tool_env: codex_protocol::turn_input::ToolEnv,
     project_instructions: Option<Arc<LoadedAgentsMd>>,
     // Model and reasoning inputs are carried for the follow-up Guardian and V2 migrations.
     pub(crate) model_info: Arc<CatalogModel>,
@@ -140,6 +141,7 @@ impl GuardianReviewContext {
             review_execution: None,
             parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: environments.clone(),
+            tool_env: turn.turn_metadata_state.tool_env_snapshot(),
             project_instructions: None,
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
@@ -158,6 +160,10 @@ impl GuardianReviewContext {
     pub(crate) fn environments(&self) -> &TurnEnvironmentSnapshot {
         &self.environments
     }
+
+    pub(crate) fn tool_env(&self) -> &codex_protocol::turn_input::ToolEnv {
+        &self.tool_env
+    }
 }
 
 impl From<&Arc<StepContext>> for GuardianReviewContext {
@@ -168,6 +174,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
             parent_response: step.turn.extension_data.get::<ParentResponse>(),
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
+            tool_env: step.tool_env.clone(),
             project_instructions: Some(step.loaded_agents_md.clone().unwrap_or_default()),
             model_info: Arc::clone(&step.settings.model_info),
             reasoning_effort: step.settings.reasoning_effort().cloned(),
@@ -186,6 +193,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
             review_execution: None,
             parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: turn.initial_environments.clone(),
+            tool_env: turn.turn_metadata_state.tool_env_snapshot(),
             project_instructions: None,
             model_info: Arc::clone(turn.model_info()),
             reasoning_effort: turn.reasoning_effort().cloned(),

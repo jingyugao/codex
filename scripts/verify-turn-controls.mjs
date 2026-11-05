@@ -63,7 +63,29 @@ const server = createServer(async (request, response) => {
   }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const overrides = { model: 'fixture-model', model_catalog_json: catalog, model_provider: 'local_fixture',
+// Configure trusted local command hooks. Log only synthetic fixture variables.
+const hookLog = join(workspace, 'hook-env.log');
+const asyncReady = join(workspace, 'async-hook-ready');
+const asyncRelease = join(workspace, 'async-hook-release');
+const asyncResult = join(workspace, 'async-hook-result');
+const hookNames = ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'Interrupt'];
+const hookLogger = join(root, 'hook-logger.cjs');
+await writeFile(hookLogger, `const fs = require('node:fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+fs.appendFileSync(${JSON.stringify(hookLog)}, [input.turn_id, process.argv[2], process.env.TRACE_MARKER ?? 'unset', process.env.HOOK_BASE_MARKER].join('|') + '\\n');
+`);
+const configLines = ['[features]', 'hooks = true'];
+for (const name of hookNames) {
+  const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(hookLogger)} ${name}`;
+  configLines.push(`[[hooks.${name}]]`, `[[hooks.${name}.hooks]]`, 'type = "command"',
+    `command = ${JSON.stringify(command)}`);
+}
+// Hold a background hook until steer updates the active turn; its process must retain its original environment.
+const asyncCommand = `if [ "${"${TRACE_MARKER-unset}"}" = TRACE_A ]; then : > ${JSON.stringify(asyncReady)}; i=0; while [ ! -f ${JSON.stringify(asyncRelease)} ] && [ "$i" -lt 200 ]; do i=$((i + 1)); sleep 0.05; done; printf '%s' "$TRACE_MARKER" > ${JSON.stringify(asyncResult)}; fi`;
+configLines.push('[[hooks.UserPromptSubmit]]', '[[hooks.UserPromptSubmit.hooks]]', 'type = "command"',
+  `command = ${JSON.stringify(asyncCommand)}`, 'async = true');
+await writeFile(join(root, 'codex', 'config.toml'), configLines.join('\n'));
+const overrides = { 'features.hooks': true, model: 'fixture-model', model_catalog_json: catalog, model_provider: 'local_fixture',
   'features.enable_request_compression': false, 'features.apps': false, 'features.memories': false,
   'features.shell_snapshot': false,
   'model_providers.local_fixture.name': 'Local verification fixture',
@@ -72,7 +94,7 @@ const overrides = { model: 'fixture-model', model_catalog_json: catalog, model_p
   'model_providers.local_fixture.requires_openai_auth': false };
 const binary = process.env.CODEX_FORK_BINARY || resolve(import.meta.dirname, '../codex-rs/target/debug/codex-app-server');
 const child = spawn(binary, Object.entries(overrides).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`]), {
-  cwd: workspace, env: { PATH: process.env.PATH, HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex'), TMPDIR: root },
+  cwd: workspace, env: { PATH: process.env.PATH, HOOK_BASE_MARKER: 'base-hook', HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex'), TMPDIR: root },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
 let stderr = '';
@@ -129,6 +151,10 @@ async function check(name, action) {
 try {
   await rpc('initialize', { clientInfo: { name: 'fork_verification', version: '1' }, capabilities: { experimentalApi: true } });
   child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+  const listed = await rpc('hooks/list', { cwds: [workspace] });
+  const hookState = Object.fromEntries(listed.data[0].hooks.map(hook => [hook.key, { trusted_hash: hook.currentHash }]));
+  assert(Object.keys(hookState).length >= hookNames.length, 'Expected command hooks to be discovered');
+  await rpc('config/batchWrite', { edits: [{ keyPath: 'hooks.state', value: hookState, mergeStrategy: 'upsert' }], reloadUserConfig: true });
 
   await check('env-start-steer-snapshot-and-new-turn-reset', async () => {
     let firstResponse;
@@ -142,6 +168,7 @@ try {
     const id = await thread();
     const turnId = await start(id, 'ENV_SNAPSHOT_TASK', { TRACE_MARKER: 'TRACE_A' });
     await until(() => firstResponse);
+    await until(() => exists('async-hook-ready'));
     await assert.rejects(rpc('turn/steer', { threadId: id, expectedTurnId: 'stale',
       input: [{ type: 'text', text: 'rejected' }], env: { TRACE_MARKER: 'WRONG' } }));
     execute(firstResponse.response, firstResponse.body,
@@ -149,6 +176,9 @@ try {
     await until(() => exists('env-running.flag'));
     await rpc('turn/steer', { threadId: id, expectedTurnId: turnId,
       input: [{ type: 'text', text: 'Use the updated trace for the next step.' }], env: { TRACE_MARKER: 'TRACE_B' } });
+    await writeFile(asyncRelease, 'release');
+    await until(() => exists('async-hook-result'));
+    assert.equal(await readFile(asyncResult, 'utf8'), 'TRACE_A');
     await ended(turnId);
     assert.equal(await readFile(join(workspace, 'first.trace'), 'utf8'), 'TRACE_A');
     assert.equal(await readFile(join(workspace, 'second.trace'), 'utf8'), 'TRACE_B');
@@ -162,6 +192,12 @@ try {
     const resetTurn = await start(id, 'NEW_TURN_WITHOUT_ENV');
     await ended(resetTurn);
     assert.equal(await readFile(join(workspace, 'reset.trace'), 'utf8'), 'unset');
+    const logs = (await readFile(hookLog, 'utf8')).trim().split('\n');
+    for (const [hookTurn, name, trace] of [[turnId, 'UserPromptSubmit', 'TRACE_A'], [turnId, 'PreToolUse', 'TRACE_A'],
+      [turnId, 'PostToolUse', 'TRACE_A'], [turnId, 'PreToolUse', 'TRACE_B'], [turnId, 'PostToolUse', 'TRACE_B'],
+      [turnId, 'Stop', 'TRACE_B'], [resetTurn, 'UserPromptSubmit', 'unset'], [resetTurn, 'Stop', 'unset']]) {
+      assert(logs.includes(`${hookTurn}|${name}|${trace}|base-hook`), `Missing hook snapshot ${name}/${trace}`);
+    }
   });
 
   await check('concurrent-threads-keep-environments-isolated', async () => {
@@ -182,6 +218,10 @@ try {
     await Promise.all(turns.map(turnId => ended(turnId)));
     assert.equal(await readFile(join(workspace, 'concurrent-A.trace'), 'utf8'), 'ONLY_A');
     assert.equal(await readFile(join(workspace, 'concurrent-B.trace'), 'utf8'), 'ONLY_B');
+    const logs = (await readFile(hookLog, 'utf8')).trim().split('\n');
+    for (const [hookTurn, trace] of [[turns[0], 'ONLY_A'], [turns[1], 'ONLY_B']]) for (const name of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) {
+      assert(logs.includes(`${hookTurn}|${name}|${trace}|base-hook`), `Missing concurrent hook ${name}/${trace}`);
+    }
   });
 
   await check('ordinary-interrupt-resume-without-user-message', async () => {
@@ -200,6 +240,8 @@ try {
     await assert.rejects(rpc('turn/resume', { threadId: id, turnId }));
     await rpc('turn/interrupt', { threadId: id, turnId });
     await ended(turnId, 'interrupted');
+    const interruptLogs = (await readFile(hookLog, 'utf8')).trim().split('\n');
+    assert(interruptLogs.includes(`${turnId}|Interrupt|RESUMED_TRACE|base-hook`));
     const resumed = await rpc('turn/resume', { threadId: id, turnId });
     assert.notEqual(resumed.turnId, turnId);
     await until(() => resumedRequest);
