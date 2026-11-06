@@ -577,6 +577,11 @@ pub enum ThreadStoreToml {
     InMemory {
         id: String,
     },
+    /// FORK: PostgreSQL thread store. `url` falls back to `CODEX_FORK_PG_URL`.
+    #[schemars(skip)]
+    Postgres {
+        url: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

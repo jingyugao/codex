@@ -350,7 +350,8 @@ impl MessageProcessor {
             ThreadStoreConfig::Local => state_db.as_ref().map(|state_db| {
                 Arc::new(LocalQueueStore::new(Arc::clone(state_db))) as Arc<dyn QueueStore>
             }),
-            ThreadStoreConfig::InMemory { .. } => None,
+            // FORK: queue persistence is not implemented for Postgres yet.
+            ThreadStoreConfig::InMemory { .. } | ThreadStoreConfig::Postgres { .. } => None,
         };
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);

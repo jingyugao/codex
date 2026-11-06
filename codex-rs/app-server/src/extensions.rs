@@ -84,6 +84,8 @@ pub(crate) fn thread_extensions(
     }
     codex_history_notes_extension::install(&mut builder, auth_manager.clone());
     crate::install_agent_message_board(&mut builder, thread_manager.clone());
+    // FORK: cross-pod turn handoff; inert unless CODEX_FORK_HANDOFF_STORE is set.
+    codex_fork_ext::install(&mut builder, thread_manager.clone());
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,

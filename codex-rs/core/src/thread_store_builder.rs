@@ -103,6 +103,15 @@ impl<'config> ThreadStoreBuilder<'config> {
             ThreadStoreConfig::InMemory { id } => {
                 Arc::new(InMemoryThreadStore::for_id(id).with_state_db(state_db))
             }
+            // FORK: never fall back to local storage when Postgres was requested.
+            ThreadStoreConfig::Postgres { url } => Arc::new(
+                codex_fork_pg::PgThreadStore::new(codex_fork_pg::PgThreadStoreConfig {
+                    url: url.clone(),
+                    owner_id: codex_fork_pg::owner_id_from_env(),
+                    default_model_provider_id: config.model_provider_id.clone(),
+                })
+                .unwrap_or_else(|err| panic!("cannot build postgres thread store: {err}")),
+            ),
         }
     }
 }

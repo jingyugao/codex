@@ -164,6 +164,9 @@ members = [
     "test-binary-support",
     "thread-manager-sample",
     "thread-store",
+    # FORK: fork-only crates live under fork/ to keep upstream rebases conflict-free.
+    "fork/ext",
+    "fork/pg",
     "uds",
     "codex-experimental-api-macros",
     "plugin",
@@ -303,6 +306,9 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
+# FORK: fork-only crates.
+codex-fork-ext = { path = "fork/ext" }
+codex-fork-pg = { path = "fork/pg" }
 codex-tools = { path = "tools" }
 codex-tcp-tunnel = { path = "tcp-tunnel" }
 codex-tui = { path = "tui" }
