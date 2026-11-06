@@ -49,6 +49,39 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sigterm_hands_off_running_turn_to_next_server_with_its_env() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let handoff_dir = TempDir::new()?;
+    let store = format!("file:{}", handoff_dir.path().display());
+    run_handoff(codex_home.path(), codex_home.path(), &store, "").await?;
+    assert!(std::fs::read_dir(handoff_dir.path())?.next().is_none());
+    Ok(())
+}
+
+/// Production shape: pods share only Postgres, and neither keeps conversation files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_pods_hand_off_without_local_conversation_files() -> Result<()> {
+    let Ok(url) = std::env::var("CODEX_FORK_PG_TEST_URL") else {
+        eprintln!("skipping: CODEX_FORK_PG_TEST_URL is not set");
+        return Ok(());
+    };
+    let (home_a, home_b) = (TempDir::new()?, TempDir::new()?);
+    let config =
+        format!("experimental_thread_store = {{ type = \"postgres\", url = \"{url}\" }}\n");
+    run_handoff(home_a.path(), home_b.path(), &url, &config).await?;
+    for home in [home_a.path(), home_b.path()] {
+        let files = conversation_files(home)?;
+        assert!(
+            files.is_empty(),
+            "conversation files under {}: {files:?}",
+            home.display()
+        );
+    }
+    Ok(())
+}
+
+/// Starts a turn with fork env on pod A, SIGTERMs A mid-sampling, then resumes the thread on
+/// pod B and requires B to finish the same turn with the same env.
+async fn run_handoff(home_a: &Path, home_b: &Path, store: &str, extra_config: &str) -> Result<()> {
     let server = responses::start_mock_server().await;
     // Source server: the first sampling request never completes before SIGTERM.
     mount(
@@ -66,13 +99,11 @@ async fn sigterm_hands_off_running_turn_to_next_server_with_its_env() -> Result<
     ]);
     mount(&server, 2, echo, Duration::ZERO).await;
     mount(&server, 3, final_message("recovered"), Duration::ZERO).await;
+    for home in [home_a, home_b] {
+        write_config(home, &server.uri(), extra_config)?;
+    }
 
-    let codex_home = TempDir::new()?;
-    let handoff_dir = TempDir::new()?;
-    write_config(codex_home.path(), &server.uri())?;
-
-    // Pod A: start a turn carrying fork env, then SIGTERM it mid-sampling.
-    let (mut pod_a, addr) = spawn_server(codex_home.path(), handoff_dir.path(), "pod-a").await?;
+    let (mut pod_a, addr) = spawn_server(home_a, store, "pod-a").await?;
     let mut ws = connect(addr).await?;
     initialize(&mut ws).await?;
     let thread = request(
@@ -117,14 +148,8 @@ async fn sigterm_hands_off_running_turn_to_next_server_with_its_env() -> Result<
         .await
         .context("pod A did not exit after handing off")??;
     assert!(status.success(), "pod A exit: {status}");
-    let record: Value = serde_json::from_slice(&std::fs::read(
-        handoff_dir.path().join(format!("{thread_id}.json")),
-    )?)?;
-    assert_eq!(record["turn_id"], json!(turn_id));
-    assert_eq!(record["payload"]["env"], json!({ "TRACE_ID": "trace-123" }));
 
-    // Pod B: resuming the thread recovers the same turn and finishes it.
-    let (_pod_b, addr) = spawn_server(codex_home.path(), handoff_dir.path(), "pod-b").await?;
+    let (_pod_b, addr) = spawn_server(home_b, store, "pod-b").await?;
     let mut ws = connect(addr).await?;
     initialize(&mut ws).await?;
     request(
@@ -132,7 +157,7 @@ async fn sigterm_hands_off_running_turn_to_next_server_with_its_env() -> Result<
         2,
         "thread/resume",
         serde_json::to_value(ThreadResumeParams {
-            thread_id: thread_id.clone(),
+            thread_id,
             ..Default::default()
         })?,
     )
@@ -152,8 +177,27 @@ async fn sigterm_hands_off_running_turn_to_next_server_with_its_env() -> Result<
         !bodies.iter().any(|body| body.contains("fork.env.")),
         "fork env metadata must not reach the model provider"
     );
-    assert!(std::fs::read_dir(handoff_dir.path())?.next().is_none());
     Ok(())
+}
+
+/// Rollout and history files that would hold conversation content.
+fn conversation_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "jsonl" || ext == "zst")
+            {
+                found.push(path);
+            }
+        }
+    }
+    Ok(found)
 }
 
 fn final_message(text: &str) -> String {
@@ -174,14 +218,15 @@ async fn mount(server: &MockServer, priority: u8, body: String, delay: Duration)
         .await;
 }
 
-fn write_config(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+fn write_config(codex_home: &Path, server_uri: &str, extra: &str) -> std::io::Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
-            r#"
+            r#"{extra}
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "read-only"
+# These tests cover handoff and env, not sandboxing; avoid needing bubblewrap.
+sandbox_mode = "danger-full-access"
 model_provider = "mock_provider"
 
 [model_providers.mock_provider]
@@ -195,22 +240,22 @@ stream_max_retries = 0
     )
 }
 
-async fn spawn_server(
-    codex_home: &Path,
-    handoff_dir: &Path,
-    owner: &str,
-) -> Result<(Child, SocketAddr)> {
+async fn spawn_server(codex_home: &Path, store: &str, owner: &str) -> Result<(Child, SocketAddr)> {
     let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
         .context("build codex-app-server first")?;
-    let mut child = Command::new(program)
-        .args(["--listen", "ws://127.0.0.1:0"])
-        .arg("--disable-plugin-startup-tasks-for-tests")
+    // Debug builds accept a flag that skips plugin startup work; release builds reject it.
+    let help = std::process::Command::new(&program)
+        .arg("--help")
+        .output()?;
+    let mut command = Command::new(program);
+    command.args(["--listen", "ws://127.0.0.1:0"]);
+    if String::from_utf8_lossy(&help.stdout).contains("--disable-plugin-startup-tasks-for-tests") {
+        command.arg("--disable-plugin-startup-tasks-for-tests");
+    }
+    let mut child = command
         .env("CODEX_HOME", codex_home)
         .env("RUST_LOG", "warn,codex_fork_ext=info")
-        .env(
-            codex_fork_ext::HANDOFF_STORE_ENV_VAR,
-            format!("file:{}", handoff_dir.display()),
-        )
+        .env(codex_fork_ext::HANDOFF_STORE_ENV_VAR, store)
         .env(codex_fork_ext::HANDOFF_ON_SIGTERM_ENV_VAR, "1")
         .env(codex_fork_ext::HANDOFF_GRACE_SECS_ENV_VAR, "0")
         .env("CODEX_FORK_OWNER_ID", owner)

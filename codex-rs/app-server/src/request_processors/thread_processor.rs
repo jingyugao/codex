@@ -4434,12 +4434,8 @@ impl ThreadRequestProcessor {
                 }
                 let instruction_sources = codex_thread.legacy_instruction_sources().await;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
-                let Some(rollout_path) = rollout_path else {
-                    let error =
-                        internal_error(format!("rollout path missing for thread {thread_id}"));
-                    self.outgoing.send_error(request_id, error).await;
-                    return Ok(ControlFlow::Break(()));
-                };
+                // FORK: non-local thread stores have no rollout file; the response omits `path`.
+                let rollout_path = rollout_path.unwrap_or_default();
                 // Paginated JSONL is canonical, but its SQLite projection can lag after a
                 // previous write failure. Persist after reopening the live writer so legacy
                 // response hydration reads the latest durable turns and items.
@@ -5192,6 +5188,8 @@ impl ThreadRequestProcessor {
         resume_source_thread: Option<StoredThread>,
         include_turns: bool,
     ) -> std::result::Result<Thread, String> {
+        // FORK: an empty path means the thread store has no rollout file.
+        let rollout_path = (!rollout_path.as_os_str().is_empty()).then_some(rollout_path);
         let config_snapshot = thread.config_snapshot().await;
         let session_id = thread.startup_metadata().session_id.to_string();
         let can_accept_direct_input = can_accept_direct_input(
@@ -5262,7 +5260,7 @@ impl ThreadRequestProcessor {
                     session_id.clone(),
                     thread.multi_agent_version(),
                     &config_snapshot,
-                    Some(rollout_path.into()),
+                    rollout_path.map(Into::into),
                 );
                 thread.preview = preview_from_rollout_items(items);
                 Ok(thread)
@@ -5276,7 +5274,7 @@ impl ThreadRequestProcessor {
         thread.can_accept_direct_input = Some(can_accept_direct_input);
         thread.id = thread_id.to_string();
         thread.session_id = session_id;
-        thread.path = Some(rollout_path.to_path_buf());
+        thread.path = rollout_path.map(Path::to_path_buf);
         if include_turns {
             let history_items = thread_history.get_rollout_items();
             populate_thread_turns_from_history(
