@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use codex_core::ThreadManager;
 use codex_extension_api::ExtensionRegistryBuilder;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -94,12 +95,66 @@ fn install_sandbox<C: Sync + 'static>(
             .map_err(|_| {
                 anyhow::anyhow!("set {SANDBOX_STORE_ENV_VAR} or {HANDOFF_STORE_ENV_VAR}")
             })?;
-        ForkSandbox::new(thread_manager, sandbox_store_from_spec(&spec)?, template)
+        ForkSandbox::new(
+            thread_manager.clone(),
+            sandbox_store_from_spec(&spec)?,
+            template,
+        )
     })();
+    // Guard even when binding failed to install: the template states that commands belong in
+    // sandboxes.
+    spawn_local_environment_guard(thread_manager);
     match result {
         Ok(sandbox) => builder.thread_lifecycle_contributor(Arc::new(sandbox)),
-        Err(err) => warn!("fork sandbox binding disabled: {err:#}"),
+        Err(err) => error!("fork sandbox binding disabled: {err:#}"),
     }
+}
+
+/// Exit status when sandbox binding is on but the app-server still has a local environment
+/// (`EX_CONFIG`).
+const LOCAL_ENVIRONMENT_EXIT_CODE: i32 = 78;
+/// Reserved id of the app-server's own environment.
+const LOCAL_ENVIRONMENT_ID: &str = "local";
+const GUARD_POLL: Duration = Duration::from_millis(20);
+const GUARD_MAX_WAIT: Duration = Duration::from_secs(30);
+
+/// With sandbox binding on, commands must never fall back to the app-server container: a thread
+/// whose binding failed to load would otherwise run them locally. Exits the process when a local
+/// environment is configured (set `include_local = false` in `environments.toml`, or
+/// `CODEX_EXEC_SERVER_URL=none` without one).
+///
+/// The thread manager is constructed around the extension registry, so the check waits until it
+/// is available.
+fn spawn_local_environment_guard(thread_manager: Weak<ThreadManager>) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        warn!("fork sandbox: no tokio runtime; local environment guard disabled");
+        return;
+    };
+    runtime.spawn(async move {
+        let started = tokio::time::Instant::now();
+        let manager = loop {
+            if let Some(manager) = thread_manager.upgrade() {
+                break manager;
+            }
+            if started.elapsed() > GUARD_MAX_WAIT {
+                warn!("fork sandbox: thread manager unavailable; local environment not checked");
+                return;
+            }
+            tokio::time::sleep(GUARD_POLL).await;
+        };
+        if manager
+            .environment_manager()
+            .get_environment(LOCAL_ENVIRONMENT_ID)
+            .is_some()
+        {
+            error!(
+                "fork sandbox: {SANDBOX_URL_TEMPLATE_ENV_VAR} is set but a local environment is \
+                 configured; set include_local = false in environments.toml (or \
+                 CODEX_EXEC_SERVER_URL=none) so commands never run in the app-server"
+            );
+            std::process::exit(LOCAL_ENVIRONMENT_EXIT_CODE);
+        }
+    });
 }
 
 /// Builds a sandbox binding store from `postgres://…`/`postgresql://…` or `file:<dir>`. File

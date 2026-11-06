@@ -115,14 +115,36 @@ v1 是"立即停"：进行中的工具调用会被中断，B 上模型看到中�
 |---|---|
 | `CODEX_FORK_SANDBOX_URL_TEMPLATE` | 开启功能。沙箱地址模板，`{id}` 替换为 environment id，例如 `ws://sandbox-proxy/sandboxes/{id}`。由代理把 id 映射到实际沙箱 |
 | `CODEX_FORK_SANDBOX_STORE` | 绑定记录存储，`postgres://…` 或 `file:<dir>`（文件在 `<dir>/sandboxes/`）；不设时用 `CODEX_FORK_HANDOFF_STORE` |
-| `CODEX_EXEC_SERVER_URL=none` | **部署时必须设置**：没有本地环境，环境不可用时命令失败，而不是在 app-server 容器里执行 |
+| 关闭本地环境 | **必须**：有 `environments.toml` 时写 `include_local = false`；没有时设 `CODEX_EXEC_SERVER_URL=none`。设置了模板而进程里仍有本地环境时，app-server 启动后立即以退出码 78 退出，避免命令落到 app-server 容器里执行 |
 
-客户端用法（只在创建时做一次）：
+两种用法：
+
+**A. 虚拟槽位（推荐）**：`environments.toml` 静态列出固定数量的槽位，地址都指向同一个网关，网关按路径把槽位一致性 hash 到实际沙箱。客户端不调用 `environment/add`，只在创建 thread 时选一个槽位：
+
+```toml
+# $CODEX_HOME/environments.toml，由脚本生成 slot-0 … slot-1023
+include_local = false
+[[environments]]
+id = "slot-0"
+url = "ws://sandbox-gw/s/slot-0"
+```
+
+```
+thread/start {…, environments:[{environmentId:"slot-<hash(workspaceId) % 1024>", cwd:"/workspaces/<id>"}]}
+```
+
+- 槽位数固定，所以每个 app-server 的连接数固定，不随 thread 增长；加减沙箱只改网关后面的副本数，不改这个文件。
+- 模板也按同样的格式配（`ws://sandbox-gw/s/{id}`），与静态地址保持一致。槽位已经在配置里登记，加载 thread 时不会重新登记。
+
+**B. 每个 thread 一个环境**：创建时登记一次。
 
 ```
 environment/add {environmentId:"sbx-<id>", execServerUrl:<按模板拼出的地址>}
 thread/start    {…, environments:[{environmentId:"sbx-<id>", cwd:"/workspace"}]}
 ```
+
+- 注意：上游的 `environment/add` 是**替换**语义，同一个 id 再登记一次会新建连接，可能中断正在执行的命令，所以 id 不要在 thread 之间复用。
+- 登记的环境不会删除，app-server 的连接数随 thread 增长，需要定期重启或另行回收。
 
 行为：
 
@@ -139,8 +161,8 @@ thread/start    {…, environments:[{environmentId:"sbx-<id>", cwd:"/workspace"}
 
 - 模型写一段 JS，由 `codex-code-mode-host`（内嵌 V8）执行。JS 里的 `tools.exec_command(...)` 等调用会回到 Codex 按普通工具调用处理，所以**命令仍然在 thread 绑定的沙箱里执行**，per-turn `fork.env.*` 同样生效。
 - 部署：`codex-code-mode-host` 必须和 `codex-app-server`（或 `codex`）放在同一目录，app-server 会在自己旁边找它。
-- 配置：`config.toml` 里设置 `[features] code_mode = true`。可选：`code_mode_only = true`，让模型只能通过 JS 调用工具。上游把这个功能标为 UnderDevelopment，默认关闭。
-- 找不到 host 时，上游会退回到直接调用工具，并只警告一次，turn 不会失败。
+- 是否使用 code mode 首先由模型目录决定：模型的 `tool_mode` 优先于 `[features] code_mode` 开关。目前目录里的模型（如 `gpt-6.1-sol`、`gpt-6-astra`）都是 `code_mode_only`，**部署时必须带上 host**。
+- 找不到 host 时：`tool_mode = code_mode` 的模型会退回到直接调用工具；`code_mode_only` 的模型**不会退回**，模型拿不到任何工具，命令全部失败（只有一条 `Code Mode is unavailable … fail closed` 警告）。
 - 构建：`scripts/fork/build.sh` 默认构建 host（不需要可加 `--without-code-mode`）。它会从 `github.com/openai/codex/releases` 的 `rusty-v8-v<版本>` 下载与 `Cargo.lock` 版本对应的预编译 V8，校验 sha256 后再设置 `RUSTY_V8_ARCHIVE` / `RUSTY_V8_SRC_BINDING_PATH`。CI 的 release 包里一直带着 host；`fork-tests` 也会构建它，跑 `sandbox_e2e` 中的 code mode 用例。
 
 ## 4. 对上游文件的改动（rebase 冲突点）
@@ -220,7 +242,7 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 | `fork/ext/tests/handoff_e2e.rs` 用例 1 | file store：SIGTERM → 同一 turn_id 恢复 → B 上 `echo $TRACE_ID` 输出带 env |
 | `fork/ext/tests/handoff_e2e.rs` 用例 2 | 两个独立 CODEX_HOME 只共享 PG：恢复成功，且两边都没有对话文件 |
 | `core` 中 `fork_env` 单测 | 前缀与变量名过滤 |
-| `fork/ext/tests/sandbox_e2e.rs` | 真实 `codex-exec-server` 作沙箱：thread/start 绑定 → 杀掉 pod A → pod B 不调 `environment/add` 直接 resume，命令仍在沙箱执行 → fork 出的 thread 继承沙箱；code mode：一个 JS cell 在沙箱里执行两条命令并带上 `fork.env.*`（需要先构建 `codex-code-mode-host`） |
+| `fork/ext/tests/sandbox_e2e.rs` | 真实 `codex-exec-server` 作沙箱：thread/start 绑定 → 杀掉 pod A → pod B 不调 `environment/add` 直接 resume，命令仍在沙箱执行 → fork 出的 thread 继承沙箱；虚拟槽位：`environments.toml` 静态登记槽位，两个 pod 都不调 `environment/add`；本地环境未关闭时 app-server 以退出码 78 退出；code mode：一个 JS cell 在沙箱里执行两条命令并带上 `fork.env.*`（需要先构建 `codex-code-mode-host`） |
 | `fork/queue/tests/queue_env.rs` + `fork/queue` 单测 | 队列项 metadata：`queue/start` 和空闲派发都应用到 turn env；update 保留；list 不暴露 |
 
 当前状态：以上测试在 `1ba5814` 上，用本地 debug 构建全部通过。
@@ -262,6 +284,7 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 - [ ] v2：在 step 边界挂起（需要改 core turn loop，冲突风险中等）；等 v1 实际使用后再决定。
 - [x] B 恢复时让 remote environment 自动可用（3.4 沙箱绑定）。
 - [ ] 沙箱绑定的 PG 表需要在有 Postgres 的环境里跑一次端到端验证。
+- [ ] 虚拟槽位加网关（Envoy ring hash）的部署验证：扩缩容、沙箱挂掉后自动转移。
 - [ ] 本地 sqlite 日志不落盘的部署配置，以及验证。
 
 ## 8. 安全

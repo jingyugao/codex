@@ -143,6 +143,119 @@ async fn thread_keeps_its_sandbox_across_cold_resume_and_fork() -> Result<()> {
     Ok(())
 }
 
+/// Virtual slots: sandboxes are listed statically in `environments.toml` (a gateway maps each slot
+/// to a real exec-server), so clients never call `environment/add`, on the first pod or after a
+/// cold resume on another.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn static_slots_need_no_environment_add() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let store_dir = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let store = format!("file:{}", store_dir.path().display());
+    let (_sandbox, sandbox_addr) = spawn_exec_server().await?;
+    let template = format!("ws://{sandbox_addr}/?sandbox={{id}}");
+
+    let server = responses::start_mock_server().await;
+    for (index, (call, command)) in [
+        ("call-1", "echo $((50+1))-slot"),
+        ("call-2", "echo $((50+2))-slot-resumed"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let priority = u8::try_from(index * 2 + 1)?;
+        let exec = responses::sse(vec![
+            responses::ev_response_created("resp"),
+            responses::ev_exec_command_call(call, command),
+            responses::ev_completed("resp"),
+        ]);
+        mount(&server, priority, exec).await;
+        mount(&server, priority + 1, final_message("done")).await;
+    }
+    write_config(codex_home.path(), &server.uri())?;
+    let mut slots = String::from("include_local = false\n");
+    for slot in ["slot-0", "slot-1"] {
+        slots.push_str(&format!(
+            "\n[[environments]]\nid = \"{slot}\"\nurl = \"{}\"\n",
+            template.replace("{id}", slot)
+        ));
+    }
+    std::fs::write(codex_home.path().join("environments.toml"), slots)?;
+
+    let (mut pod_a, addr) = spawn_server(codex_home.path(), &store, &template, "pod-a").await?;
+    let mut ws = connect(addr).await?;
+    initialize(&mut ws).await?;
+    let thread = request(
+        &mut ws,
+        2,
+        "thread/start",
+        json!({
+            "model": "mock-model",
+            "environments": [{ "environmentId": "slot-1", "cwd": workspace.path() }],
+        }),
+    )
+    .await?;
+    let thread_id = thread.result["thread"]["id"]
+        .as_str()
+        .context("thread id")?
+        .to_string();
+    run_turn(&mut ws, 3, &thread_id).await?;
+    assert_output(&server, "51-slot").await?;
+
+    kill(&pod_a)?;
+    let _ = pod_a.wait().await;
+    let (_pod_b, addr) = spawn_server(codex_home.path(), &store, &template, "pod-b").await?;
+    let mut ws = connect(addr).await?;
+    initialize(&mut ws).await?;
+    request(&mut ws, 2, "thread/resume", json!({ "threadId": thread_id })).await?;
+    run_turn(&mut ws, 3, &thread_id).await?;
+    assert_output(&server, "52-slot-resumed").await?;
+    let binding = std::fs::read_to_string(
+        store_dir
+            .path()
+            .join("sandboxes")
+            .join(format!("{thread_id}.json")),
+    )?;
+    assert!(binding.contains("slot-1"), "{binding}");
+    Ok(())
+}
+
+/// With sandbox binding on, an app-server that still has a local environment refuses to run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_environment_is_refused_when_binding_is_on() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let store_dir = TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    write_config(codex_home.path(), &server.uri())?;
+    let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
+        .context("build codex-app-server first")?;
+    // No CODEX_EXEC_SERVER_URL and no environments.toml: the local environment is present.
+    let mut child = Command::new(program)
+        .args(["--listen", "ws://127.0.0.1:0"])
+        .env("CODEX_HOME", codex_home.path())
+        .env("RUST_LOG", "warn")
+        .env_remove("CODEX_EXEC_SERVER_URL")
+        .env(
+            codex_fork_ext::SANDBOX_URL_TEMPLATE_ENV_VAR,
+            "ws://127.0.0.1:1/?sandbox={id}",
+        )
+        .env(
+            codex_fork_ext::SANDBOX_STORE_ENV_VAR,
+            format!("file:{}", store_dir.path().display()),
+        )
+        .env_remove(codex_fork_ext::HANDOFF_STORE_ENV_VAR)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let status = timeout(READ_TIMEOUT, child.wait())
+        .await
+        .context("app-server should exit")??;
+    assert_eq!(status.code(), Some(78), "{status}");
+    Ok(())
+}
+
 /// Code mode: one JS cell runs two commands in the sandbox, with the turn's fork env.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_cell_runs_several_commands_in_the_sandbox() -> Result<()> {
