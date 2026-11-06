@@ -8,16 +8,20 @@ on:
         default: main
         required: true
         type: string
-  # Bootstrap the workflow without merging it into the default branch first.
+      publish:
+        description: Publish the verified build as the latest GitHub Release
+        default: false
+        required: false
+        type: boolean
+  # Feature-branch pushes build and test the pushed commit without publishing.
   push:
-    branches: [feat/turn-env-safe-interrupt]
-    paths: [.github/workflows/fork-release.yml]
+    branches: ['feat/fork-**']
 
 permissions:
   contents: read
 
 concurrency:
-  group: fork-release-${{ inputs.source_ref || 'main' }}
+  group: fork-release-${{ inputs.source_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.source_ref || 'main' }}
+          ref: ${{ inputs.source_ref || github.sha }}
           persist-credentials: false
 
       - name: Resolve source and build paths
@@ -157,7 +161,7 @@ jobs:
           set -euo pipefail
           scratch="$(mktemp -d "$RUNNER_TEMP/codex-bwrap-check.XXXXXXXX")"
           trap 'rm -rf "$scratch"' EXIT
-          mkdir "$scratch/package" "$scratch/home" "$scratch/path" "$scratch/workspace"
+          mkdir -p "$scratch/package" "$scratch/home/.codex" "$scratch/path" "$scratch/workspace"
           tar -xzf dist/codex-linux-x64.tar.gz -C "$scratch/package"
           cd "$scratch/workspace"
           env -i HOME="$scratch/home" CODEX_HOME="$scratch/home/.codex" PATH="$scratch/path" \
@@ -169,15 +173,6 @@ jobs:
             exit 1
           fi
           grep -F 'bundled bubblewrap digest mismatch' "$scratch/stderr"
-
-      - name: Verify turn environments and queued submissions
-        shell: bash
-        run: |
-          set -euo pipefail
-          wrapper="$RUNNER_TEMP/codex-app-server-wrapper"
-          printf '#!/bin/sh\nexec "%s/bin/codex" app-server "$@"\n' "$PACKAGE_DIR" > "$wrapper"
-          chmod +x "$wrapper"
-          CODEX_FORK_BINARY="$wrapper" node scripts/verify-turn-controls.mjs
 
       - name: Upload verified release assets
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -200,8 +195,79 @@ jobs:
             ${{ runner.temp }}/codex-musl-tools-x86_64-unknown-linux-musl
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
+  # Fork crates and the hook points they rely on, including the cross-process handoff test.
+  fork-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: codex
+          POSTGRES_DB: codex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      CARGO_BUILD_JOBS: '3'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CODEX_FORK_PG_TEST_URL: postgres://postgres:codex@127.0.0.1:5432/codex
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libcap-dev libasound2-dev
+
+      - name: Restore test build cache
+        id: test-cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target
+          key: fork-tests-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            fork-tests-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-
+
+      - name: Build app-server for handoff tests
+        run: cargo build -p codex-app-server --bin codex-app-server
+
+      - name: Test fork crates
+        run: cargo test -p codex-fork-pg -p codex-fork-ext
+
+      - name: Test fork hook points
+        run: |
+          cargo test -p codex-core --lib fork_env
+          cargo test -p codex-hooks --lib
+
+      - name: Lint fork crates
+        run: cargo clippy -p codex-fork-pg -p codex-fork-ext --all-targets -- -D warnings
+
+      - name: Save test build cache
+        if: always() && !cancelled() && steps.test-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target
+          key: ${{ steps.test-cache.outputs.cache-primary-key }}
+
   publish:
-    needs: build
+    needs: [build, fork-tests]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -239,7 +305,7 @@ jobs:
 
           Use codex app-server for the App Server. SHA256SUMS is attached.
           Validation: static binaries, Debian 12 startup, Code Mode and sandbox smoke tests,
-          and turn/hook/queue/interrupt-resume regressions using local mock model endpoints.
+          and fork tests (Postgres thread store, turn env, cross-process turn handoff).
           EOF
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-draft"; then
