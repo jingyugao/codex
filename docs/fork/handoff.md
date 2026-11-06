@@ -46,9 +46,22 @@
 
 - 去掉前缀后作为环境变量注入：本地 command hook、远程 environment hook、`exec_command`。
 - 这些条目在发给模型 provider 和 MCP server 之前会被剔除。
-- 变量名只允许 `[A-Za-z_][A-Za-z0-9_]*`。上游限制：最多 16 个条目，值不超过 128 字节。
+- 校验（fork 加的，`app-server/src/fork_metadata.rs`）：`turn/start`、`turn/steer`、`thread/queue/add` 中的 `fork.env.*` 条目最多 16 个，key 含前缀不超过 64 字节，变量名必须匹配 `[A-Za-z_][A-Za-z0-9_]*`，值不超过 128 字节且不含 NUL。不符合时返回 `invalid_request`。其他 metadata key 不做检查，和上游一致（上游对每轮 metadata 不做长度校验）。
+- 并入活动 turn 时（`turn/start` 或 `turn/steer`），整份 metadata 被替换，之后启动的 exec 和 hook 使用新 env。
 - 跨 pod 恢复的 turn 没有 client metadata，env 通过 `ForkTurnEnv`（turn extension data，按 turn_id 生效）带过去。
 - 需要客户端开启 `experimentalApi`。
+
+排队消息同样可以带 env：`thread/queue/add` 新增可选字段 `responsesapiClientMetadata`，语义与 `turn/start` 相同。
+
+```json
+{"method":"thread/queue/add","params":{"threadId":"…","input":[…],"clientUserMessageId":"u1:…",
+  "responsesapiClientMetadata":{"fork.env.COLONY_USER":"u1"}}}
+```
+
+- 和输入一起存进队列记录，出队（`thread/queue/start` 或空闲自动派发）时作为该 turn 的 metadata。
+- 存储格式：没有 metadata 时仍然是上游的 `TurnInput` JSON；有 metadata 时包一层 `{"forkQueuedInputV1":{"input":…,"responsesapiClientMetadata":…}}`（`ext/queue/src/fork_env.rs`）。
+- `thread/queue/update` 保留原来的 metadata；`thread/queue/list` 不返回 metadata。
+- env 以明文存在本地 sqlite 队列库中，出队或删除时随记录删除。
 
 ### 3.2 PostgreSQL thread store
 
@@ -62,7 +75,8 @@ experimental_thread_store = { type = "postgres", url = "postgres://user:pass@hos
 - 实现上游的 `ThreadStore` trait（16 个必需方法），表结构见 `codex-rs/fork/pg/migrations/0001_init.sql`，首次使用时自动迁移。
 - 所有权防护：每个 thread 有 `owner_id` + `epoch`。resume 时 `epoch+1`，旧 owner 的写入返回 `Conflict`，防止两个 pod 同时写。
 - URL 无效时启动直接 panic，**不会退回本地存储**。
-- 未实现（返回 Unsupported 或空）：sections、attachments、projects、全文搜索、按路径读、paginated 历史、排队提交（QueueStore）。
+- 未实现（返回 Unsupported 或空）：sections、attachments、projects、全文搜索、按路径读、paginated 历史。
+- 排队（`thread/queue/*`）：使用本机 sqlite 队列库（与原生模式相同的 `LocalQueueStore`），不在 PG 中。队列只对本 pod 可见；`CODEX_SQLITE_HOME` 在 emptyDir 上时，pod 重建后队列丢失，在 PVC 上则保留。删除 PG thread 时不会清理它的队列项。
 - 本地仍有的文件：app-server 自身的 sqlite（日志等）。部署时建议：`history.persistence = "none"`，`CODEX_SQLITE_HOME` 指向 emptyDir，控制日志级别。
 
 ### 3.3 跨 pod 交接（v1）
@@ -106,7 +120,13 @@ v1 是"立即停"：进行中的工具调用会被中断，B 上模型看到中�
 | `core/src/unified_exec/process_manager.rs` | exec 注入 env |
 | `hooks/src/registry.rs`、`hooks/src/engine/command_runner.rs` | `with_command_env` |
 | `config/src/config_toml.rs`、`core/src/config/mod.rs`、`core/src/thread_store_builder.rs` | `postgres` store 配置 |
-| `app-server/src/message_processor.rs` | Postgres 暂无 queue store |
+| `app-server/src/message_processor.rs` | Postgres 模式使用本地 sqlite queue store |
+| `app-server/src/lib.rs` | 注册 `fork_metadata` |
+| `app-server/src/request_processors/turn_processor.rs` | `turn/start`、`turn/steer` 校验 `fork.env.*` |
+| `app-server/src/request_processors/thread_queue_processor.rs` | `queue/add` 校验并保存 metadata |
+| `app-server-protocol/src/protocol/v2/thread.rs` | `ThreadQueueAddParams.responsesapiClientMetadata` |
+| `ext/queue/src/service.rs`、`ext/queue/src/lib.rs`、`ext/queue/Cargo.toml` | 队列项 metadata 的存取与出队应用 |
+| `app-server/tests/suite/v2/*.rs`、`tui/src/session_queue_commands.rs` | 结构体字面量补 `responsesapi_client_metadata: None` |
 | `app-server/src/extensions.rs` | 安装 fork extension（1 行） |
 | `app-server/src/request_processors/thread_processor.rs` | resume 允许没有 rollout path |
 
@@ -161,7 +181,8 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 | `fork/pg/tests/pg_store.rs` | 与 InMemory 行为对齐的往返、列表/归档/删除、旧 owner 被拒、交接只被认领一次 |
 | `fork/ext/tests/handoff_e2e.rs` 用例 1 | file store：SIGTERM → 同一 turn_id 恢复 → B 上 `echo $TRACE_ID` 输出带 env |
 | `fork/ext/tests/handoff_e2e.rs` 用例 2 | 两个独立 CODEX_HOME 只共享 PG：恢复成功，且两边都没有对话文件 |
-| `core` 中 `fork_env` 单测 | 前缀与变量名过滤 |
+| `core` 中 `fork_env` 单测 | 前缀与变量名过滤；`fork.env.*` 校验 |
+| `ext/queue/tests/fork_queue_env.rs` | 队列项 metadata：`queue/start` 和空闲派发都应用到 turn env；update 保留；list 不暴露 |
 
 当前状态：以上测试在 `1ba5814` 上，用本地 debug 构建全部通过。
 
@@ -198,7 +219,7 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 - [ ] 用 `19b432a` 的远程构建产物重新验证，然后发布 Release（旧的预编译包基于 `f354156`，缺少 PG resume 修复，不应发布）。
 - [ ] 确认新一轮 CI 通过。
 - [ ] 远端 `fork/main` 的去留（旧实现；重置需要 force push）。
-- [ ] Postgres 下的 QueueStore（排队提交）。
+- [ ] 二期：PG 持久化的 QueueStore（目前 PG 模式下用本地 sqlite 队列）。
 - [ ] v2：在 step 边界挂起（需要改 core turn loop，冲突风险中等）；等 v1 实际使用后再决定。
 - [ ] B 恢复时让 remote environment 自动可用（目前依赖 B 端预先配置）。
 - [ ] 本地 sqlite 日志不落盘的部署配置，以及验证。

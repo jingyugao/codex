@@ -137,6 +137,7 @@ async fn queue_crud_preserves_identity_order_and_notifications() -> Result<()> {
         ThreadQueueAddParams {
             client_user_message_id: "first-client-message".to_string(),
             ..submission(&thread_id, "first")
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -274,6 +275,7 @@ async fn queue_list_returns_ordered_pages_and_lightweight_notifications() -> Res
             thread_id: thread_id.clone(),
             input: vec![text(&"x".repeat(64 * 1024))],
             client_user_message_id: "oversized-snapshot".to_string(),
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -378,6 +380,7 @@ async fn idle_queue_dispatch_preserves_client_id() -> Result<()> {
         thread_id: thread_id.clone(),
         input: vec![text("durable queued message")],
         client_user_message_id: "stable-queued-client-id".to_string(),
+        responsesapi_client_metadata: None,
     };
     let queued = queue_item(&mut app, queued_submission.clone()).await?;
     assert_eq!(
@@ -477,6 +480,7 @@ async fn cold_thread_resume_dispatches_a_persisted_queued_submission() -> Result
         ThreadQueueAddParams {
             client_user_message_id: "cold-resumed-queue-item".to_string(),
             ..submission(&thread_id, "dispatch this after a cold thread resume")
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -584,6 +588,7 @@ async fn interrupt_preserves_queue_and_queue_start_can_resume_a_non_head_item() 
         ThreadQueueAddParams {
             client_user_message_id: "second-queued-client-id".to_string(),
             ..submission(&thread_id, "second queued message")
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -722,6 +727,7 @@ async fn queue_start_while_active_returns_busy_and_preserves_the_queue() -> Resu
         ThreadQueueAddParams {
             client_user_message_id: "active-queued-client-id".to_string(),
             ..submission(&thread_id, "send this queued message now")
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -887,6 +893,7 @@ async fn a_new_turn_preserves_queued_messages_until_it_completes() -> Result<()>
         ThreadQueueAddParams {
             client_user_message_id: "first-queued-client-id".to_string(),
             ..submission(&thread_id, "first queued message")
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -895,6 +902,7 @@ async fn a_new_turn_preserves_queued_messages_until_it_completes() -> Result<()>
         ThreadQueueAddParams {
             client_user_message_id: "second-queued-client-id".to_string(),
             ..submission(&thread_id, "second queued message")
+            responsesapi_client_metadata: None,
         },
     )
     .await?;
@@ -1059,7 +1067,9 @@ fn submission(thread_id: &str, value: &str) -> ThreadQueueAddParams {
         thread_id: thread_id.to_string(),
         input: vec![text(value)],
         client_user_message_id: format!("queued-{value}"),
+        responsesapi_client_metadata: None,
     }
+    responsesapi_client_metadata: None,
 }
 
 fn text(value: &str) -> UserInput {

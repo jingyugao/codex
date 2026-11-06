@@ -267,8 +267,20 @@ impl QueuedItemService {
         thread_id: ThreadId,
         input: TurnInput,
     ) -> Result<QueuedItem, QueueServiceError> {
+        // FORK: upstream entry point; metadata-carrying variant below.
+        self.enqueue_with_responses_metadata(thread_id, input, None)
+            .await
+    }
+
+    /// FORK: queues `input` with Responses client metadata for the turn that later starts it.
+    pub async fn enqueue_with_responses_metadata(
+        &self,
+        thread_id: ThreadId,
+        input: TurnInput,
+        responses_metadata: Option<HashMap<String, String>>,
+    ) -> Result<QueuedItem, QueueServiceError> {
         let input = prepare_queued_user_input(input).await?;
-        let payload = serde_json::to_string(&input)?;
+        let payload = crate::fork_env::encode(&input, &responses_metadata)?; // FORK
         let item = {
             let _dispatch_guard = self.dispatch_guard(thread_id).await;
             let item = queued_item_from_record(self.queue.enqueue(thread_id, payload).await?)?;
@@ -319,7 +331,11 @@ impl QueuedItemService {
                 });
         }
         let input = prepare_queued_user_input(input).await?;
-        let payload = serde_json::to_string(&input)?;
+        // FORK: editing an item keeps the metadata it was queued with.
+        let responses_metadata =
+            crate::fork_env::queued_metadata(self.queue.as_ref(), thread_id, &queued_item_id)
+                .await?;
+        let payload = crate::fork_env::encode(&input, &responses_metadata)?;
         let item = self
             .queue
             .update(thread_id, queued_item_id, payload)
@@ -388,13 +404,20 @@ impl QueuedItemService {
         let input @ TurnInput::UserInput { .. } = item.input else {
             return Err(QueueServiceError::InvalidInput);
         };
+        // FORK: apply the metadata stored with this item.
+        let responses_metadata =
+            crate::fork_env::queued_metadata(self.queue.as_ref(), thread_id, &queued_item_id)
+                .await?;
         let submission = thread
-            .start_turn_if_idle(TurnInputRequest::new(input).with_trace(trace).on_start(
-                TurnStartOptions {
-                    turn_trigger: Some("queue".to_string()),
-                    ..Default::default()
-                },
-            ))
+            .start_turn_if_idle(
+                TurnInputRequest::new(input)
+                    .with_trace(trace)
+                    .on_start(TurnStartOptions {
+                        turn_trigger: Some("queue".to_string()),
+                        ..Default::default()
+                    })
+                    .with_responses_metadata(responses_metadata),
+            )
             .await?;
         if matches!(submission, StartIfIdleSubmission::Started { .. }) {
             self.delete_locked(thread_id, queued_item_id).await?;
@@ -422,8 +445,9 @@ impl QueuedItemService {
             };
             let queued_item_id = record.id.clone();
 
-            let input = match serde_json::from_str::<TurnInput>(&record.payload) {
-                Ok(input) => input,
+            // FORK: payloads may carry per-item metadata.
+            let (input, responses_metadata) = match crate::fork_env::decode(&record.payload) {
+                Ok(decoded) => decoded,
                 Err(error) => {
                     tracing::warn!(%queued_item_id, %error, "discarding invalid queued item");
                     self.delete_locked(thread_id, queued_item_id).await?;
@@ -437,10 +461,14 @@ impl QueuedItemService {
             }
 
             match thread
-                .start_turn_if_idle(TurnInputRequest::new(input).on_start(TurnStartOptions {
-                    turn_trigger: Some("queue".to_string()),
-                    ..Default::default()
-                }))
+                .start_turn_if_idle(
+                    TurnInputRequest::new(input)
+                        .on_start(TurnStartOptions {
+                            turn_trigger: Some("queue".to_string()),
+                            ..Default::default()
+                        })
+                        .with_responses_metadata(responses_metadata), // FORK
+                )
                 .await
             {
                 Ok(StartIfIdleSubmission::Started { .. }) => {
@@ -571,6 +599,6 @@ fn queued_item_from_record(
 ) -> Result<QueuedItem, QueueServiceError> {
     Ok(QueuedItem {
         id: record.id,
-        input: serde_json::from_str::<TurnInput>(&record.payload)?,
+        input: crate::fork_env::decode(&record.payload)?.0, // FORK
     })
 }

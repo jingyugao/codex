@@ -948,6 +948,11 @@ pub struct ThreadQueueAddParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
     pub client_user_message_id: String,
+    /// FORK: Responses client metadata for the turn that later starts this item, with the
+    /// same semantics as `turn/start.responsesapiClientMetadata` (including `fork.env.*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

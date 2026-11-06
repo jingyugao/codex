@@ -79,13 +79,16 @@ impl ThreadQueueRequestProcessor {
         params: ThreadQueueAddParams,
     ) -> Result<ThreadQueueAddResponse, JSONRPCErrorError> {
         validate_user_input_image_urls(&params.input)?;
+        // FORK: same fork env checks as turn/start.
+        crate::fork_metadata::validate(params.responsesapi_client_metadata.as_ref())?;
         let (thread_id, loaded_thread, source) = self.require_thread(&params.thread_id).await?;
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let queued_item = self
             .service()?
-            .enqueue(
+            .enqueue_with_responses_metadata(
                 thread_id,
                 submission_into_turn_input(params.input, Some(params.client_user_message_id)),
+                params.responsesapi_client_metadata,
             )
             .await
             .map_err(queue_error)?;

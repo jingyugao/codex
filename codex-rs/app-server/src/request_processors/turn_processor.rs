@@ -550,6 +550,11 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        // FORK: reject fork env entries Core would drop or pass on unchecked.
+        crate::fork_metadata::validate_turn(
+            params.responsesapi_client_metadata.as_ref(),
+            params.responsesapi_client_metadata_patch.as_ref(),
+        )?;
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await
@@ -1086,6 +1091,11 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: TurnSteerParams,
     ) -> Result<TurnSteerResponse, JSONRPCErrorError> {
+        // FORK: reject fork env entries Core would drop or pass on unchecked.
+        crate::fork_metadata::validate_turn(
+            params.responsesapi_client_metadata.as_ref(),
+            params.responsesapi_client_metadata_patch.as_ref(),
+        )?;
         let (_, thread) = self
             .load_thread(&params.thread_id)
             .await

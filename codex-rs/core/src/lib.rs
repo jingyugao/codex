@@ -102,6 +102,7 @@ pub mod exec_env;
 mod fork_env;
 pub use fork_env::FORK_ENV_METADATA_PREFIX;
 pub use fork_env::ForkTurnEnv;
+pub use fork_env::validate_fork_env_metadata;
 mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;

@@ -347,11 +347,14 @@ impl MessageProcessor {
         // Queue persistence requires SQLite, so in-memory thread stores and
         // app servers without a state database do not have a queue backend.
         let queue_store: Option<Arc<dyn QueueStore>> = match &config.experimental_thread_store {
-            ThreadStoreConfig::Local => state_db.as_ref().map(|state_db| {
-                Arc::new(LocalQueueStore::new(Arc::clone(state_db))) as Arc<dyn QueueStore>
-            }),
-            // FORK: queue persistence is not implemented for Postgres yet.
-            ThreadStoreConfig::InMemory { .. } | ThreadStoreConfig::Postgres { .. } => None,
+            // FORK: Postgres threads queue in the pod-local SQLite queue database; a
+            // Postgres-backed queue is future work.
+            ThreadStoreConfig::Local | ThreadStoreConfig::Postgres { .. } => {
+                state_db.as_ref().map(|state_db| {
+                    Arc::new(LocalQueueStore::new(Arc::clone(state_db))) as Arc<dyn QueueStore>
+                })
+            }
+            ThreadStoreConfig::InMemory { .. } => None,
         };
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);

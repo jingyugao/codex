@@ -125,6 +125,7 @@ mod extensions;
 mod external_agent_migration;
 mod external_auth;
 mod filters;
+mod fork_metadata; // FORK
 mod fs_watch;
 mod fuzzy_file_search;
 mod gateway_oauth_notifications;
