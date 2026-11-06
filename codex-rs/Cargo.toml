@@ -167,6 +167,7 @@ members = [
     # FORK: fork-only crates live under fork/ to keep upstream rebases conflict-free.
     "fork/ext",
     "fork/pg",
+    "fork/queue",
     "uds",
     "codex-experimental-api-macros",
     "plugin",
@@ -309,6 +310,7 @@ codex-thread-store = { path = "thread-store" }
 # FORK: fork-only crates.
 codex-fork-ext = { path = "fork/ext" }
 codex-fork-pg = { path = "fork/pg" }
+codex-fork-queue = { path = "fork/queue" }
 codex-tools = { path = "tools" }
 codex-tcp-tunnel = { path = "tcp-tunnel" }
 codex-tui = { path = "tui" }

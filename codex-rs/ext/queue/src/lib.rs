@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use codex_extension_api::ExtensionRegistryBuilder;
 
-mod fork_env; // FORK
 mod service;
 
 pub use service::QueueServiceError;

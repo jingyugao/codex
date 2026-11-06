@@ -1,0 +1,28 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-fork-queue"
+version.workspace = true
+
+[lib]
+name = "codex_fork_queue"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+codex-thread-store = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-queue-extension = { workspace = true }
+codex-thread-store = { workspace = true }
+core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

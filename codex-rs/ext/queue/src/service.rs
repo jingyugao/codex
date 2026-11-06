@@ -9,7 +9,6 @@ use codex_core::CodexThread;
 use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
-use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
@@ -17,6 +16,7 @@ use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
+use codex_fork_queue::turn_request as fork_request; // FORK
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::snapshot_local_user_input;
@@ -267,8 +267,7 @@ impl QueuedItemService {
         thread_id: ThreadId,
         input: TurnInput,
     ) -> Result<QueuedItem, QueueServiceError> {
-        // FORK: upstream entry point; metadata-carrying variant below.
-        self.enqueue_with_responses_metadata(thread_id, input, None)
+        self.enqueue_with_responses_metadata(thread_id, input, None) // FORK
             .await
     }
 
@@ -277,10 +276,10 @@ impl QueuedItemService {
         &self,
         thread_id: ThreadId,
         input: TurnInput,
-        responses_metadata: Option<HashMap<String, String>>,
+        env: codex_fork_queue::QueuedMetadata,
     ) -> Result<QueuedItem, QueueServiceError> {
         let input = prepare_queued_user_input(input).await?;
-        let payload = crate::fork_env::encode(&input, &responses_metadata)?; // FORK
+        let payload = codex_fork_queue::encode_payload(&input, &env)?; // FORK
         let item = {
             let _dispatch_guard = self.dispatch_guard(thread_id).await;
             let item = queued_item_from_record(self.queue.enqueue(thread_id, payload).await?)?;
@@ -332,10 +331,9 @@ impl QueuedItemService {
         }
         let input = prepare_queued_user_input(input).await?;
         // FORK: editing an item keeps the metadata it was queued with.
-        let responses_metadata =
-            crate::fork_env::queued_metadata(self.queue.as_ref(), thread_id, &queued_item_id)
-                .await?;
-        let payload = crate::fork_env::encode(&input, &responses_metadata)?;
+        let env =
+            codex_fork_queue::stored_metadata(self.queue.as_ref(), thread_id, &queued_item_id);
+        let payload = codex_fork_queue::encode_payload(&input, &env.await?)?;
         let item = self
             .queue
             .update(thread_id, queued_item_id, payload)
@@ -405,19 +403,16 @@ impl QueuedItemService {
             return Err(QueueServiceError::InvalidInput);
         };
         // FORK: apply the metadata stored with this item.
-        let responses_metadata =
-            crate::fork_env::queued_metadata(self.queue.as_ref(), thread_id, &queued_item_id)
-                .await?;
+        let env =
+            codex_fork_queue::stored_metadata(self.queue.as_ref(), thread_id, &queued_item_id);
+        let env = env.await?;
         let submission = thread
-            .start_turn_if_idle(
-                TurnInputRequest::new(input)
-                    .with_trace(trace)
-                    .on_start(TurnStartOptions {
-                        turn_trigger: Some("queue".to_string()),
-                        ..Default::default()
-                    })
-                    .with_responses_metadata(responses_metadata),
-            )
+            .start_turn_if_idle(fork_request(input, env).with_trace(trace).on_start(
+                TurnStartOptions {
+                    turn_trigger: Some("queue".to_string()),
+                    ..Default::default()
+                },
+            ))
             .await?;
         if matches!(submission, StartIfIdleSubmission::Started { .. }) {
             self.delete_locked(thread_id, queued_item_id).await?;
@@ -445,9 +440,8 @@ impl QueuedItemService {
             };
             let queued_item_id = record.id.clone();
 
-            // FORK: payloads may carry per-item metadata.
-            let (input, responses_metadata) = match crate::fork_env::decode(&record.payload) {
-                Ok(decoded) => decoded,
+            let input = match serde_json::from_str::<TurnInput>(&record.payload) {
+                Ok(input) => input,
                 Err(error) => {
                     tracing::warn!(%queued_item_id, %error, "discarding invalid queued item");
                     self.delete_locked(thread_id, queued_item_id).await?;
@@ -460,15 +454,12 @@ impl QueuedItemService {
                 continue;
             }
 
+            let env = codex_fork_queue::payload_metadata(&record.payload); // FORK
             match thread
-                .start_turn_if_idle(
-                    TurnInputRequest::new(input)
-                        .on_start(TurnStartOptions {
-                            turn_trigger: Some("queue".to_string()),
-                            ..Default::default()
-                        })
-                        .with_responses_metadata(responses_metadata), // FORK
-                )
+                .start_turn_if_idle(fork_request(input, env).on_start(TurnStartOptions {
+                    turn_trigger: Some("queue".to_string()),
+                    ..Default::default()
+                }))
                 .await
             {
                 Ok(StartIfIdleSubmission::Started { .. }) => {
@@ -599,6 +590,6 @@ fn queued_item_from_record(
 ) -> Result<QueuedItem, QueueServiceError> {
     Ok(QueuedItem {
         id: record.id,
-        input: crate::fork_env::decode(&record.payload)?.0, // FORK
+        input: serde_json::from_str::<TurnInput>(&record.payload)?,
     })
 }

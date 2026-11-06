@@ -23,6 +23,8 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use tracing::info;
 use tracing::warn;
 
+/// Per-turn env validation and queued-message metadata.
+pub use codex_fork_queue as queue;
 pub use handoff::ForkHandoff;
 pub use handoff::HandoffEnvironment;
 pub use handoff::HandoffEnvironments;

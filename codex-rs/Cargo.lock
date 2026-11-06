@@ -3649,6 +3649,7 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-fork-pg",
+ "codex-fork-queue",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -3684,6 +3685,22 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "codex-fork-queue"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-core",
+ "codex-extension-api",
+ "codex-protocol",
+ "codex-queue-extension",
+ "codex-thread-store",
+ "core_test_support",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4729,13 +4746,13 @@ dependencies = [
  "anyhow",
  "codex-core",
  "codex-extension-api",
+ "codex-fork-queue",
  "codex-protocol",
  "codex-state",
  "codex-thread-store",
  "codex-utils-absolute-path",
  "core_test_support",
  "pretty_assertions",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",

@@ -61,52 +61,6 @@ fn env_from_metadata(metadata: BTreeMap<String, String>) -> BTreeMap<String, Str
         .collect()
 }
 
-/// Most `fork.env.*` entries accepted in one request.
-pub const MAX_FORK_ENV_ENTRIES: usize = 16;
-/// Longest accepted metadata key, prefix included.
-pub const MAX_FORK_ENV_KEY_BYTES: usize = 64;
-/// Longest accepted value.
-pub const MAX_FORK_ENV_VALUE_BYTES: usize = 128;
-
-/// Rejects `fork.env.*` entries that would otherwise be dropped or passed on unchecked.
-///
-/// Other metadata keys are left alone so upstream behavior does not change.
-pub fn validate_fork_env_metadata<'a>(
-    metadata: impl IntoIterator<Item = (&'a String, &'a String)>,
-) -> Result<(), String> {
-    let mut count = 0;
-    for (key, value) in metadata {
-        let Some(name) = key.strip_prefix(FORK_ENV_METADATA_PREFIX) else {
-            continue;
-        };
-        count += 1;
-        if count > MAX_FORK_ENV_ENTRIES {
-            return Err(format!(
-                "at most {MAX_FORK_ENV_ENTRIES} {FORK_ENV_METADATA_PREFIX}* entries are allowed"
-            ));
-        }
-        if key.len() > MAX_FORK_ENV_KEY_BYTES {
-            return Err(format!(
-                "metadata key `{key}` exceeds {MAX_FORK_ENV_KEY_BYTES} bytes"
-            ));
-        }
-        if !is_valid_env_name(name) {
-            return Err(format!(
-                "metadata key `{key}` must name an environment variable matching [A-Za-z_][A-Za-z0-9_]*"
-            ));
-        }
-        if value.len() > MAX_FORK_ENV_VALUE_BYTES {
-            return Err(format!(
-                "value of metadata key `{key}` exceeds {MAX_FORK_ENV_VALUE_BYTES} bytes"
-            ));
-        }
-        if value.contains('\0') {
-            return Err(format!("value of metadata key `{key}` contains NUL"));
-        }
-    }
-    Ok(())
-}
-
 /// Accepts portable shell variable names only, so values cannot smuggle `=` or NUL.
 fn is_valid_env_name(name: &str) -> bool {
     let mut bytes = name.bytes();
@@ -151,54 +105,5 @@ mod tests {
                 ("_PRIVATE".to_string(), "p".to_string()),
             ])
         );
-    }
-
-    fn validate(entries: &[(&str, &str)]) -> Result<(), String> {
-        let metadata: Vec<(String, String)> = entries
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        validate_fork_env_metadata(metadata.iter().map(|(key, value)| (key, value)))
-    }
-
-    #[test]
-    fn validation_accepts_limits_and_ignores_other_keys() {
-        let long_value = "v".repeat(MAX_FORK_ENV_VALUE_BYTES);
-        let long_key = format!(
-            "{FORK_ENV_METADATA_PREFIX}{}",
-            "K".repeat(MAX_FORK_ENV_KEY_BYTES - FORK_ENV_METADATA_PREFIX.len())
-        );
-        assert_eq!(
-            validate(&[
-                ("fork.env.COLONY_USER", &long_value),
-                (&long_key, "x"),
-                ("not-an-env key with spaces", &"y".repeat(500)),
-            ]),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn validation_rejects_bad_entries() {
-        let too_long_key = format!(
-            "{FORK_ENV_METADATA_PREFIX}{}",
-            "K".repeat(MAX_FORK_ENV_KEY_BYTES)
-        );
-        let too_long_value = "v".repeat(MAX_FORK_ENV_VALUE_BYTES + 1);
-        for entries in [
-            vec![("fork.env.BAD-NAME", "x")],
-            vec![("fork.env.", "x")],
-            vec![(too_long_key.as_str(), "x")],
-            vec![("fork.env.OK", too_long_value.as_str())],
-            vec![("fork.env.OK", "a\0b")],
-        ] {
-            assert!(validate(&entries).is_err(), "{entries:?}");
-        }
-
-        let names: Vec<String> = (0..=MAX_FORK_ENV_ENTRIES)
-            .map(|index| format!("fork.env.V{index}"))
-            .collect();
-        let too_many: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "x")).collect();
-        assert!(validate(&too_many).is_err());
     }
 }

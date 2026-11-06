@@ -16,9 +16,9 @@ workspace = true
 [dependencies]
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-fork-queue = { workspace = true } # FORK
 codex-protocol = { workspace = true }
 codex-thread-store = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
