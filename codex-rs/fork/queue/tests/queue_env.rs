@@ -75,7 +75,10 @@ async fn gated_server() -> (StreamingSseServer, oneshot::Sender<()>) {
 }
 
 async fn finish_turn(test: &TestCodex, release: oneshot::Sender<()>) {
-    release.send(()).expect("response gate should remain open");
+    assert!(
+        release.send(()).is_ok(),
+        "response gate should remain open"
+    );
     wait_for_event_match(test.codex.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_)).then_some(())
     })
