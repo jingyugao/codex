@@ -4,6 +4,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/jingyugao/codex/feat/fork-v1/scripts/fork/build.sh \
 #     | bash -s -- --install-deps
 #
+# From an extracted source tarball (no git needed):
+#
+#   tar -xzf codex-fork-<sha>.tar.gz && codex-fork/scripts/fork/build.sh --source codex-fork
+#
 # Parallelism is derived from available memory: rustc on codex-core needs several GB per job,
 # and using every core on a small-memory machine exhausts RAM.
 set -euo pipefail
@@ -17,6 +21,7 @@ BINS="codex codex-exec-server"
 PREFIX=""
 INSTALL_DEPS=0
 NO_BUILD=0
+SOURCE=""
 GB_PER_JOB=3
 
 usage() {
@@ -26,6 +31,7 @@ Usage: build.sh [options]
   --repo URL          Git repository (default: $REPO_URL)
   --ref REF           Branch, tag or commit to build (default: $REF)
   --dir DIR           Checkout directory (default: ./codex-fork)
+  --source DIR        Build an existing source tree (e.g. an extracted tarball); skips git
   --profile NAME      release or debug (default: $PROFILE)
   --jobs N            Parallel build jobs (default: available GB / $GB_PER_JOB, at least 1)
   --with-code-mode    Also build codex-code-mode-host (pulls a prebuilt V8 library)
@@ -44,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --repo) REPO_URL="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
     --dir) DIR="$2"; shift 2 ;;
+    --source) SOURCE="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --jobs) JOBS="$2"; shift 2 ;;
     --with-code-mode) BINS="$BINS codex-code-mode-host"; shift ;;
@@ -83,7 +90,9 @@ install_deps() {
 
 check_deps() {
   local missing=()
-  for tool in git curl cc pkg-config; do
+  local tools=(curl cc pkg-config)
+  [[ -n "$SOURCE" ]] || tools+=(git)
+  for tool in "${tools[@]}"; do
     command -v "$tool" >/dev/null || missing+=("$tool")
   done
   if [[ "$OS" == Linux ]] && ! pkg-config --exists libcap 2>/dev/null; then
@@ -156,7 +165,9 @@ build() {
   # rustup installs the toolchain pinned in rust-toolchain.toml on first use.
   log "toolchain: $(rustup show active-toolchain 2>/dev/null || cargo --version)"
   log "building [$BINS] ($PROFILE, $jobs jobs, $(available_gb) GB available)"
-  STABLE_GIT_COMMIT="$(git rev-parse HEAD)" cargo build "${args[@]}"
+  local commit
+  commit="$(git rev-parse HEAD 2>/dev/null || cat "$DIR/FORK_COMMIT" 2>/dev/null || echo unknown)"
+  STABLE_GIT_COMMIT="$commit" cargo build "${args[@]}"
 
   local built=()
   for bin in $BINS; do built+=("$DIR/codex-rs/$out_dir/$bin"); done
@@ -173,7 +184,13 @@ build() {
 [[ $INSTALL_DEPS -eq 1 ]] && install_deps
 check_deps
 ensure_rustup
-checkout
+if [[ -n "$SOURCE" ]]; then
+  DIR="$(cd "$SOURCE" && pwd)"
+  [[ -f "$DIR/codex-rs/Cargo.toml" ]] || die "$DIR is not a codex source tree"
+  log "source: $DIR ($(cat "$DIR/FORK_COMMIT" 2>/dev/null || echo 'commit unknown'))"
+else
+  checkout
+fi
 if [[ $NO_BUILD -eq 1 ]]; then
   log "--no-build: checkout ready at $DIR"
   exit 0
