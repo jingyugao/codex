@@ -439,6 +439,14 @@ impl TurnMetadataState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = metadata;
     }
 
+    // FORK: client metadata snapshot used to derive per-turn child-process env.
+    pub(crate) fn responsesapi_client_metadata_snapshot(&self) -> BTreeMap<String, String> {
+        self.responsesapi_client_metadata
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) fn workspace_kind(&self) -> Option<String> {
         self.responsesapi_client_metadata
             .read()
@@ -467,6 +475,8 @@ impl TurnMetadataState {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        // FORK: fork env entries are for local child processes only.
+        extra.retain(|key, _| !crate::fork_env::is_fork_env_metadata_key(key));
         // Extract Guardian's internal parent before filtering configured metadata keys.
         // Ordinary app-server client metadata stays in `extra`.
         let parent_response_id =

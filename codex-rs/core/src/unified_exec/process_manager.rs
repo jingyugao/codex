@@ -1495,6 +1495,9 @@ impl UnifiedExecProcessManager {
         let shell_environment_policy = prepared.turn_environment.shell_environment_policy();
         let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
         let mut env = local_policy_env.clone();
+        // FORK: per-turn env; Codex-owned variables injected below still take precedence.
+        let fork_env = crate::fork_env::turn_env(&context.step_context.turn);
+        env.extend(fork_env.clone());
         #[cfg(windows)]
         env.retain(|name, _| !name.eq_ignore_ascii_case(CODEX_THREAD_ID_ENV_VAR));
         env.insert(
@@ -1509,9 +1512,13 @@ impl UnifiedExecProcessManager {
         let mut env = apply_unified_exec_env(env);
         strip_output_env(&mut env);
         let mut explicit_env_overrides = shell_environment_policy.r#set.clone();
+        // FORK: keep fork env over shell snapshots and remote executor policy.
+        explicit_env_overrides.extend(fork_env.clone());
         strip_output_env(&mut explicit_env_overrides);
+        let mut fork_shell_policy = shell_environment_policy.clone();
+        fork_shell_policy.r#set.extend(fork_env);
         let exec_server_env_config = ExecServerEnvConfig {
-            policy: exec_env_policy_from_shell_policy(shell_environment_policy),
+            policy: exec_env_policy_from_shell_policy(&fork_shell_policy),
             local_policy_env,
         };
         let shell_snapshot = shell_snapshot_request(prepared, context);

@@ -36,6 +36,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookExecutionMode;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::sync::Arc;
@@ -98,6 +99,13 @@ impl Hooks {
             Arc::clone(&self.environment),
             |shell| self.engine.command_runtime.reconfigured(shell),
         )
+    }
+
+    /// FORK: returns hooks whose command runtime adds `overrides` to the session env snapshot.
+    pub fn with_command_env(&self, overrides: &HashMap<String, String>) -> Self {
+        let mut hooks = self.clone();
+        hooks.engine.command_runtime = self.engine.command_runtime.with_command_env(overrides);
+        hooks
     }
 
     pub fn matches_plugin_hooks<'a>(

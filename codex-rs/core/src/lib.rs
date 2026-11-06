@@ -98,6 +98,10 @@ mod elicitation;
 mod environment_selection;
 pub mod exec;
 pub mod exec_env;
+// FORK: per-turn env for hooks and exec tools.
+mod fork_env;
+pub use fork_env::FORK_ENV_METADATA_PREFIX;
+pub use fork_env::ForkTurnEnv;
 mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;
