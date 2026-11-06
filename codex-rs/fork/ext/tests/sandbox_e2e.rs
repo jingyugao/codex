@@ -5,7 +5,9 @@
 //!
 //! Requires the binaries:
 //! `cargo build -p codex-app-server --bin codex-app-server`
-//! `cargo build -p codex-exec-server-cli --bin codex-exec-server`.
+//! `cargo build -p codex-exec-server-cli --bin codex-exec-server`
+//! and, for the code-mode test, `cargo build -p codex-code-mode-host --bin codex-code-mode-host`
+//! (app-server finds it next to its own executable).
 
 #![cfg(unix)]
 
@@ -141,7 +143,84 @@ async fn thread_keeps_its_sandbox_across_cold_resume_and_fork() -> Result<()> {
     Ok(())
 }
 
+/// Code mode: one JS cell runs two commands in the sandbox, with the turn's fork env.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_cell_runs_several_commands_in_the_sandbox() -> Result<()> {
+    if codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").is_err() {
+        eprintln!("skipping: build codex-code-mode-host first");
+        return Ok(());
+    }
+    let codex_home = TempDir::new()?;
+    let store_dir = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let store = format!("file:{}", store_dir.path().display());
+    let (_sandbox, sandbox_addr) = spawn_exec_server().await?;
+    let template = format!("ws://{sandbox_addr}/?sandbox={{id}}");
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const first = await tools.exec_command({ cmd: "echo $((40+4))-$COLONY_USER" });
+const second = await tools.exec_command({ cmd: "echo $((40+5))-second" });
+text(first.output + "|" + second.output);
+"#;
+    let cell = responses::sse(vec![
+        responses::ev_response_created("resp"),
+        responses::ev_custom_tool_call("call-js", "exec", code),
+        responses::ev_completed("resp"),
+    ]);
+    mount(&server, 1, cell).await;
+    mount(&server, 2, final_message("done")).await;
+    write_config(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(&config_path, format!("{config}\n[features]\ncode_mode = true\n"))?;
+
+    let (_pod, addr) = spawn_server(codex_home.path(), &store, &template, "pod-js").await?;
+    let mut ws = connect(addr).await?;
+    initialize(&mut ws).await?;
+    request(
+        &mut ws,
+        2,
+        "environment/add",
+        json!({ "environmentId": SANDBOX_ID, "execServerUrl": template.replace("{id}", SANDBOX_ID) }),
+    )
+    .await?;
+    let thread = request(
+        &mut ws,
+        3,
+        "thread/start",
+        json!({
+            "model": "mock-model",
+            "environments": [{ "environmentId": SANDBOX_ID, "cwd": workspace.path() }],
+        }),
+    )
+    .await?;
+    let thread_id = thread.result["thread"]["id"]
+        .as_str()
+        .context("thread id")?
+        .to_string();
+    run_turn_with_metadata(
+        &mut ws,
+        4,
+        &thread_id,
+        json!({ "fork.env.COLONY_USER": "u1" }),
+    )
+    .await?;
+    assert_output(&server, "44-u1").await?;
+    assert_output(&server, "45-second").await?;
+    Ok(())
+}
+
 async fn run_turn(ws: &mut Ws, id: i64, thread_id: &str) -> Result<()> {
+    run_turn_with_metadata(ws, id, thread_id, Value::Null).await
+}
+
+async fn run_turn_with_metadata(
+    ws: &mut Ws,
+    id: i64,
+    thread_id: &str,
+    metadata: Value,
+) -> Result<()> {
     request(
         ws,
         id,
@@ -149,6 +228,7 @@ async fn run_turn(ws: &mut Ws, id: i64, thread_id: &str) -> Result<()> {
         json!({
             "threadId": thread_id,
             "input": [{ "type": "text", "text": "run it", "text_elements": [] }],
+            "responsesapiClientMetadata": metadata,
         }),
     )
     .await?;
