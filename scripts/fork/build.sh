@@ -17,7 +17,7 @@ REF="feat/fork-v1"
 DIR="$PWD/codex-fork"
 PROFILE="release"
 JOBS=""
-BINS="codex codex-exec-server"
+BINS="codex codex-exec-server codex-code-mode-host"
 PREFIX=""
 INSTALL_DEPS=0
 NO_BUILD=0
@@ -34,7 +34,7 @@ Usage: build.sh [options]
   --source DIR        Build an existing source tree (e.g. an extracted tarball); skips git
   --profile NAME      release or debug (default: $PROFILE)
   --jobs N            Parallel build jobs (default: available GB / $GB_PER_JOB, at least 1)
-  --with-code-mode    Also build codex-code-mode-host (pulls a prebuilt V8 library)
+  --without-code-mode Skip codex-code-mode-host (Code Mode; needs a prebuilt V8 download)
   --prefix DIR        Copy built binaries to DIR/bin
   --install-deps      Install system packages with apt, dnf or brew (uses sudo on Linux)
   --no-build          Prepare dependencies and the checkout only
@@ -53,7 +53,8 @@ while [[ $# -gt 0 ]]; do
     --source) SOURCE="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --jobs) JOBS="$2"; shift 2 ;;
-    --with-code-mode) BINS="$BINS codex-code-mode-host"; shift ;;
+    --with-code-mode) shift ;;  # default; kept for compatibility
+    --without-code-mode) BINS="${BINS/ codex-code-mode-host/}"; shift ;;
     --prefix) PREFIX="$2"; shift 2 ;;
     --install-deps) INSTALL_DEPS=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
@@ -145,6 +146,43 @@ checkout() {
   log "source: $(git -C "$DIR" log -1 --format='%h %s')"
 }
 
+# codex-code-mode-host links V8. Cargo would otherwise fetch an incompatible upstream build, so
+# use the Codex-built archive pinned by Cargo.lock, verified against its published checksums.
+fetch_v8() {
+  [[ " $BINS " == *" codex-code-mode-host "* ]] || return 0
+  if [[ -n "${RUSTY_V8_ARCHIVE:-}" && -n "${RUSTY_V8_SRC_BINDING_PATH:-}" ]]; then
+    return 0
+  fi
+  local version target profile=ptrcomp_sandbox_release
+  version="$(awk '/^name = "v8"$/ { getline; gsub(/version = |"/, ""); print; exit }' \
+    "$DIR/codex-rs/Cargo.lock")"
+  [[ -n "$version" ]] || die "cannot find the v8 version in Cargo.lock"
+  case "$OS-$(uname -m)" in
+    Linux-x86_64) target=x86_64-unknown-linux-gnu ;;
+    Linux-aarch64|Linux-arm64) target=aarch64-unknown-linux-gnu ;;
+    Darwin-x86_64) target=x86_64-apple-darwin ;;
+    Darwin-arm64) target=aarch64-apple-darwin ;;
+    *) die "no prebuilt V8 for $OS $(uname -m); use --without-code-mode" ;;
+  esac
+  local url="https://github.com/openai/codex/releases/download/rusty-v8-v$version"
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/codex-v8/rusty-v8-$version-$target"
+  local sums="rusty_v8_${profile}_$target.sha256"
+  local archive="librusty_v8_${profile}_$target.a.gz"
+  local binding="src_binding_${profile}_$target.rs"
+  mkdir -p "$cache"
+  for file in "$sums" "$archive" "$binding"; do
+    [[ -s "$cache/$file" ]] || curl -fsSL -o "$cache/$file" "$url/$file" \
+      || die "download $url/$file failed (or use --without-code-mode)"
+  done
+  if command -v sha256sum >/dev/null; then
+    (cd "$cache" && sha256sum -c --quiet "$sums") || die "V8 checksum mismatch in $cache"
+  else
+    (cd "$cache" && shasum -a 256 -c --quiet "$sums") || die "V8 checksum mismatch in $cache"
+  fi
+  export RUSTY_V8_ARCHIVE="$cache/$archive" RUSTY_V8_SRC_BINDING_PATH="$cache/$binding"
+  log "V8 $version ($target) from $cache"
+}
+
 build() {
   local jobs="${JOBS:-$(default_jobs)}"
   local args=(--locked -j "$jobs")
@@ -161,6 +199,7 @@ build() {
   fi
   for bin in $BINS; do args+=(--bin "$bin"); done
 
+  fetch_v8
   cd "$DIR/codex-rs"
   # rustup installs the toolchain pinned in rust-toolchain.toml on first use.
   log "toolchain: $(rustup show active-toolchain 2>/dev/null || cargo --version)"

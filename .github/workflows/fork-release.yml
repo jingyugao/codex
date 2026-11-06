@@ -241,11 +241,36 @@ jobs:
           restore-keys: |
             fork-tests-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-
 
-      - name: Build app-server for handoff tests
-        run: cargo build -p codex-app-server --bin codex-app-server
+      - name: Fetch prebuilt V8 for the Code Mode host
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(awk '/^name = "v8"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
+          target=x86_64-unknown-linux-gnu
+          profile=ptrcomp_sandbox_release
+          dir="$RUNNER_TEMP/rusty-v8"
+          mkdir -p "$dir"
+          for file in "rusty_v8_${profile}_$target.sha256" "librusty_v8_${profile}_$target.a.gz" \
+            "src_binding_${profile}_$target.rs"; do
+            curl -fsSL -o "$dir/$file" \
+              "https://github.com/openai/codex/releases/download/rusty-v8-v$version/$file"
+          done
+          (cd "$dir" && sha256sum -c "rusty_v8_${profile}_$target.sha256")
+          {
+            echo "RUSTY_V8_ARCHIVE=$dir/librusty_v8_${profile}_$target.a.gz"
+            echo "RUSTY_V8_SRC_BINDING_PATH=$dir/src_binding_${profile}_$target.rs"
+          } >> "$GITHUB_ENV"
+
+      - name: Build binaries for the end-to-end tests
+        run: |
+          cargo build -p codex-app-server --bin codex-app-server
+          cargo build -p codex-exec-server-cli --bin codex-exec-server
+          cargo build -p codex-code-mode-host --bin codex-code-mode-host
 
       - name: Test fork crates
-        run: cargo test -p codex-fork-pg -p codex-fork-ext
+        env:
+          RUST_MIN_STACK: '8388608'
+        run: cargo test -p codex-fork-pg -p codex-fork-ext -p codex-fork-queue
 
       - name: Test fork hook points
         run: |
@@ -253,7 +278,7 @@ jobs:
           cargo test -p codex-hooks --lib
 
       - name: Lint fork crates
-        run: cargo clippy -p codex-fork-pg -p codex-fork-ext --all-targets -- -D warnings
+        run: cargo clippy -p codex-fork-pg -p codex-fork-ext -p codex-fork-queue --all-targets -- -D warnings
 
       - name: Save test build cache
         if: always() && !cancelled() && steps.test-cache.outputs.cache-hit != 'true'
@@ -305,7 +330,8 @@ jobs:
 
           Use codex app-server for the App Server. SHA256SUMS is attached.
           Validation: static binaries, Debian 12 startup, Code Mode and sandbox smoke tests,
-          and fork tests (Postgres thread store, turn env, cross-process turn handoff).
+          and fork tests (Postgres thread store, turn and queue env, cross-process turn handoff,
+          thread sandbox binding, Code Mode through the sandbox).
           EOF
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-draft"; then

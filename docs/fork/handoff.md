@@ -133,6 +133,16 @@ thread/start    {…, environments:[{environmentId:"sbx-<id>", cwd:"/workspace"}
 - 不做鉴权（由 k8s 网关负责），记录里没有密钥。
 - 不校验客户端传入的 `turn/start.environments`；客户端需要保证不传别的环境。
 
+### 3.5 Code Mode（模型用 JS 一次调用多个工具）
+
+上游已有的功能，fork 不改代码，只负责构建和发布：
+
+- 模型写一段 JS，由 `codex-code-mode-host`（内嵌 V8）执行。JS 里的 `tools.exec_command(...)` 等调用会回到 Codex 按普通工具调用处理，所以**命令仍然在 thread 绑定的沙箱里执行**，per-turn `fork.env.*` 同样生效。
+- 部署：`codex-code-mode-host` 必须和 `codex-app-server`（或 `codex`）放在同一目录，app-server 会在自己旁边找它。
+- 配置：`config.toml` 里设置 `[features] code_mode = true`。可选：`code_mode_only = true`，让模型只能通过 JS 调用工具。上游把这个功能标为 UnderDevelopment，默认关闭。
+- 找不到 host 时，上游会退回到直接调用工具，并只警告一次，turn 不会失败。
+- 构建：`scripts/fork/build.sh` 默认构建 host（不需要可加 `--without-code-mode`）。它会从 `github.com/openai/codex/releases` 的 `rusty-v8-v<版本>` 下载与 `Cargo.lock` 版本对应的预编译 V8，校验 sha256 后再设置 `RUSTY_V8_ARCHIVE` / `RUSTY_V8_SRC_BINDING_PATH`。CI 的 release 包里一直带着 host；`fork-tests` 也会构建它，跑 `sandbox_e2e` 中的 code mode 用例。
+
 ## 4. 对上游文件的改动（rebase 冲突点）
 
 `git diff 7b54fd2 HEAD --stat -- . ':!codex-rs/fork'`。除了 `fork/`、`fork_env.rs`、`scripts/fork/`、workflow 之外：
@@ -190,6 +200,7 @@ docker run -d --name codex-fork-pg -p 127.0.0.1:55432:5432 \
 cd codex-rs
 cargo build -j 2 -p codex-app-server --bin codex-app-server
 cargo build -j 2 -p codex-exec-server-cli --bin codex-exec-server   # sandbox_e2e 需要
+cargo build -j 2 -p codex-code-mode-host --bin codex-code-mode-host  # code mode 用例需要，先按 3.5 准备 V8
 CODEX_FORK_PG_TEST_URL=postgres://postgres:codex@127.0.0.1:55432/codex \
   cargo test -j 2 --no-fail-fast -p codex-fork-pg -p codex-fork-ext
 ```
@@ -209,7 +220,7 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 | `fork/ext/tests/handoff_e2e.rs` 用例 1 | file store：SIGTERM → 同一 turn_id 恢复 → B 上 `echo $TRACE_ID` 输出带 env |
 | `fork/ext/tests/handoff_e2e.rs` 用例 2 | 两个独立 CODEX_HOME 只共享 PG：恢复成功，且两边都没有对话文件 |
 | `core` 中 `fork_env` 单测 | 前缀与变量名过滤 |
-| `fork/ext/tests/sandbox_e2e.rs` | 真实 `codex-exec-server` 作沙箱：thread/start 绑定 → 杀掉 pod A → pod B 不调 `environment/add` 直接 resume，命令仍在沙箱执行 → fork 出的 thread 继承沙箱 |
+| `fork/ext/tests/sandbox_e2e.rs` | 真实 `codex-exec-server` 作沙箱：thread/start 绑定 → 杀掉 pod A → pod B 不调 `environment/add` 直接 resume，命令仍在沙箱执行 → fork 出的 thread 继承沙箱；code mode：一个 JS cell 在沙箱里执行两条命令并带上 `fork.env.*`（需要先构建 `codex-code-mode-host`） |
 | `fork/queue/tests/queue_env.rs` + `fork/queue` 单测 | 队列项 metadata：`queue/start` 和空闲派发都应用到 turn env；update 保留；list 不暴露 |
 
 当前状态：以上测试在 `1ba5814` 上，用本地 debug 构建全部通过。
