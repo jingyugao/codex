@@ -12,6 +12,7 @@
 //! that thread loaded to suspend it for handoff.
 
 mod handoff;
+mod sandbox;
 mod store;
 
 use std::sync::Arc;
@@ -30,10 +31,16 @@ pub use handoff::HandoffEnvironment;
 pub use handoff::HandoffEnvironments;
 pub use handoff::HandoffPayload;
 pub use handoff::SuspendOutcome;
+pub use sandbox::ForkSandbox;
+pub use sandbox::SANDBOX_STORE_ENV_VAR;
+pub use sandbox::SANDBOX_URL_TEMPLATE_ENV_VAR;
 pub use store::FileHandoffStore;
+pub use store::FileSandboxStore;
 pub use store::HandoffRecord;
 pub use store::HandoffStore;
 pub use store::PgHandoffStore;
+pub use store::PgSandboxStore;
+pub use store::SandboxStore;
 
 pub const HANDOFF_STORE_ENV_VAR: &str = "CODEX_FORK_HANDOFF_STORE";
 pub const HANDOFF_ON_SIGTERM_ENV_VAR: &str = "CODEX_FORK_HANDOFF_ON_SIGTERM";
@@ -48,6 +55,7 @@ pub fn install<C: Sync + 'static>(
     builder: &mut ExtensionRegistryBuilder<C>,
     thread_manager: Weak<ThreadManager>,
 ) -> Option<Arc<ForkHandoff>> {
+    install_sandbox(builder, thread_manager.clone());
     let spec = std::env::var(HANDOFF_STORE_ENV_VAR).ok()?;
     let (store, pool) = match store_from_spec(&spec) {
         Ok(store) => store,
@@ -69,6 +77,48 @@ pub fn install<C: Sync + 'static>(
         spawn_notify_listener(Arc::clone(&handoff), pool);
     }
     Some(handoff)
+}
+
+/// Installs per-thread sandbox binding when [`SANDBOX_URL_TEMPLATE_ENV_VAR`] is set. The binding
+/// store comes from [`SANDBOX_STORE_ENV_VAR`], else [`HANDOFF_STORE_ENV_VAR`].
+fn install_sandbox<C: Sync + 'static>(
+    builder: &mut ExtensionRegistryBuilder<C>,
+    thread_manager: Weak<ThreadManager>,
+) {
+    let Ok(template) = std::env::var(SANDBOX_URL_TEMPLATE_ENV_VAR) else {
+        return;
+    };
+    let result = (|| {
+        let spec = std::env::var(SANDBOX_STORE_ENV_VAR)
+            .or_else(|_| std::env::var(HANDOFF_STORE_ENV_VAR))
+            .map_err(|_| {
+                anyhow::anyhow!("set {SANDBOX_STORE_ENV_VAR} or {HANDOFF_STORE_ENV_VAR}")
+            })?;
+        ForkSandbox::new(thread_manager, sandbox_store_from_spec(&spec)?, template)
+    })();
+    match result {
+        Ok(sandbox) => builder.thread_lifecycle_contributor(Arc::new(sandbox)),
+        Err(err) => warn!("fork sandbox binding disabled: {err:#}"),
+    }
+}
+
+/// Builds a sandbox binding store from `postgres://…`/`postgresql://…` or `file:<dir>`. File
+/// bindings live in `<dir>/sandboxes`, so the directory can be shared with handoff records.
+pub fn sandbox_store_from_spec(spec: &str) -> anyhow::Result<Arc<dyn SandboxStore>> {
+    if let Some(dir) = spec.strip_prefix("file:") {
+        anyhow::ensure!(!dir.is_empty(), "file sandbox store needs a directory");
+        return Ok(Arc::new(FileSandboxStore::new(
+            std::path::Path::new(dir).join("sandboxes"),
+        )));
+    }
+    if spec.starts_with("postgres://") || spec.starts_with("postgresql://") {
+        let pool = codex_fork_pg::connect_lazy(spec)
+            .map_err(|err| anyhow::anyhow!("connect sandbox store: {err}"))?;
+        return Ok(Arc::new(PgSandboxStore(Arc::new(
+            codex_fork_pg::PgSandboxStore::new(pool),
+        ))));
+    }
+    anyhow::bail!("unsupported sandbox store value; use postgres://… or file:<dir>")
 }
 
 /// Builds a store from `postgres://…`/`postgresql://…` or `file:<dir>`, returning the pool

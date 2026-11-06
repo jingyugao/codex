@@ -134,6 +134,117 @@ impl HandoffStore for PgHandoffStore {
     }
 }
 
+/// Write-once storage for thread → sandbox bindings, shared by every app-server.
+pub trait SandboxStore: Send + Sync {
+    fn get<'a>(
+        &'a self,
+        thread_id: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Option<crate::HandoffEnvironments>>>;
+
+    /// Records `binding` unless one exists. Returns whether this call wrote it.
+    fn put_if_absent<'a>(
+        &'a self,
+        thread_id: &'a str,
+        binding: &'a crate::HandoffEnvironments,
+    ) -> BoxFuture<'a, anyhow::Result<bool>>;
+}
+
+/// Directory-backed bindings: one `<thread_id>.json` per thread, created exclusively.
+pub struct FileSandboxStore {
+    dir: PathBuf,
+}
+
+impl FileSandboxStore {
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into() }
+    }
+
+    fn path(&self, thread_id: &str) -> anyhow::Result<PathBuf> {
+        anyhow::ensure!(
+            !thread_id.is_empty()
+                && thread_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+            "invalid thread id for sandbox binding: {thread_id:?}"
+        );
+        Ok(self.dir.join(format!("{thread_id}.json")))
+    }
+}
+
+impl SandboxStore for FileSandboxStore {
+    fn get<'a>(
+        &'a self,
+        thread_id: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Option<crate::HandoffEnvironments>>> {
+        Box::pin(async move {
+            let path = self.path(thread_id)?;
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(err) => Err(err).with_context(|| format!("read {}", path.display())),
+            }
+        })
+    }
+
+    fn put_if_absent<'a>(
+        &'a self,
+        thread_id: &'a str,
+        binding: &'a crate::HandoffEnvironments,
+    ) -> BoxFuture<'a, anyhow::Result<bool>> {
+        Box::pin(async move {
+            let path = self.path(thread_id)?;
+            tokio::fs::create_dir_all(&self.dir)
+                .await
+                .with_context(|| format!("create sandbox dir {}", self.dir.display()))?;
+            // Write a complete temp file, then hard-link it: the link fails if a binding exists,
+            // so readers never observe a partial file and the first writer wins.
+            let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+            tokio::fs::write(&tmp, serde_json::to_vec(binding)?)
+                .await
+                .with_context(|| format!("write {}", tmp.display()))?;
+            let linked = tokio::fs::hard_link(&tmp, &path).await;
+            let _ = tokio::fs::remove_file(&tmp).await;
+            match linked {
+                Ok(()) => Ok(true),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(err) => Err(err).with_context(|| format!("publish {}", path.display())),
+            }
+        })
+    }
+}
+
+/// Postgres-backed bindings sharing the fork thread-store database.
+pub struct PgSandboxStore(pub Arc<codex_fork_pg::PgSandboxStore>);
+
+impl SandboxStore for PgSandboxStore {
+    fn get<'a>(
+        &'a self,
+        thread_id: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Option<crate::HandoffEnvironments>>> {
+        Box::pin(async move {
+            let binding = self
+                .0
+                .get(thread_id)
+                .await
+                .map_err(|err| anyhow::anyhow!("read sandbox binding: {err}"))?;
+            Ok(binding.map(serde_json::from_value).transpose()?)
+        })
+    }
+
+    fn put_if_absent<'a>(
+        &'a self,
+        thread_id: &'a str,
+        binding: &'a crate::HandoffEnvironments,
+    ) -> BoxFuture<'a, anyhow::Result<bool>> {
+        Box::pin(async move {
+            self.0
+                .put_if_absent(thread_id, serde_json::to_value(binding)?)
+                .await
+                .map_err(|err| anyhow::anyhow!("store sandbox binding: {err}"))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +269,42 @@ mod tests {
 
         assert_eq!(claimed, [Some(record), None]);
         assert!(store.take("../escape").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn file_sandbox_store_keeps_the_first_binding() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FileSandboxStore::new(dir.path());
+        let thread_id = "0198a0b0-0000-7000-8000-000000000002";
+        let workspace =
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path("/workspace")
+                .expect("absolute");
+        let binding = |id: &str| crate::HandoffEnvironments {
+            legacy_fallback_cwd: workspace.clone(),
+            environments: vec![crate::HandoffEnvironment {
+                environment_id: id.to_string(),
+                cwd: codex_utils_path_uri::PathUri::from_abs_path(&workspace),
+                workspace_roots: Vec::new(),
+            }],
+        };
+
+        assert_eq!(store.get(thread_id).await.expect("get"), None);
+        assert!(
+            store
+                .put_if_absent(thread_id, &binding("sbx-a"))
+                .await
+                .expect("put")
+        );
+        assert!(
+            !store
+                .put_if_absent(thread_id, &binding("sbx-b"))
+                .await
+                .expect("put")
+        );
+        assert_eq!(
+            store.get(thread_id).await.expect("get"),
+            Some(binding("sbx-a"))
+        );
+        assert!(store.get("../escape").await.is_err());
     }
 }

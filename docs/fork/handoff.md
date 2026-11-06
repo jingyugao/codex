@@ -104,8 +104,34 @@ v1 是"立即停"：进行中的工具调用会被中断，B 上模型看到中�
 
 - 只在 WebSocket 模式下生效。stdio 模式下上游不做 graceful drain。
 - 只有根 thread 的普通 turn 可以迁移。子 agent 会被中断，不做恢复。
-- remote environment 的配置不随交接迁移：B 必须能识别同一个 environment_id（`environments.toml` 或 `environment/add`）。
+- remote environment 的配置不随交接迁移：B 必须能识别同一个 environment_id。开启 3.4 的沙箱绑定后由 fork 自动处理；否则需要 `environments.toml` 或 `environment/add`。
 - k8s 的 `terminationGracePeriodSeconds` 要大于 `CODEX_FORK_HANDOFF_GRACE_SECS` 加挂起所需时间。
+
+### 3.4 thread 绑定远程沙箱
+
+一个 thread 终身绑定一个远程沙箱（`codex-exec-server`）。绑定后不可修改；`thread/fork` 出来的 thread 继承源 thread 的沙箱。实现：`codex-rs/fork/ext/src/sandbox.rs`，上游文件无改动。
+
+| 变量 | 含义 |
+|---|---|
+| `CODEX_FORK_SANDBOX_URL_TEMPLATE` | 开启功能。沙箱地址模板，`{id}` 替换为 environment id，例如 `ws://sandbox-proxy/sandboxes/{id}`。由代理把 id 映射到实际沙箱 |
+| `CODEX_FORK_SANDBOX_STORE` | 绑定记录存储，`postgres://…` 或 `file:<dir>`（文件在 `<dir>/sandboxes/`）；不设时用 `CODEX_FORK_HANDOFF_STORE` |
+| `CODEX_EXEC_SERVER_URL=none` | **部署时必须设置**：没有本地环境，环境不可用时命令失败，而不是在 app-server 容器里执行 |
+
+客户端用法（只在创建时做一次）：
+
+```
+environment/add {environmentId:"sbx-<id>", execServerUrl:<按模板拼出的地址>}
+thread/start    {…, environments:[{environmentId:"sbx-<id>", cwd:"/workspace"}]}
+```
+
+行为：
+
+- thread 就绪时（`on_thread_ready`），如果它选中了远程环境，就写入绑定记录（PG 表 `codex_fork_thread_sandboxes`，只写一次，先写者生效）。没有选中远程环境、但由 fork 产生的 thread，复制源 thread 的绑定。
+- 每次加载 thread（新建、fork、resume，包括 pod 重启和交接后的 cold resume）：本进程没有注册过该 environment id 时，按模板注册；然后把它恢复成 thread 的 sticky 环境选择。这些都在 resume 响应返回之前完成，所以之后的 turn 和排队出队的 turn 都会用这个沙箱。
+- 沙箱重启（地址不变）时，exec-server 客户端在下一次操作时自动重连。挂掉那一刻正在执行的命令会丢，文件不受影响。
+- 只绑定远程环境；本地环境（`local`）不会被记录。
+- 不做鉴权（由 k8s 网关负责），记录里没有密钥。
+- 不校验客户端传入的 `turn/start.environments`；客户端需要保证不传别的环境。
 
 ## 4. 对上游文件的改动（rebase 冲突点）
 
@@ -163,6 +189,7 @@ docker run -d --name codex-fork-pg -p 127.0.0.1:55432:5432 \
   -e POSTGRES_PASSWORD=codex -e POSTGRES_DB=codex postgres:16-alpine
 cd codex-rs
 cargo build -j 2 -p codex-app-server --bin codex-app-server
+cargo build -j 2 -p codex-exec-server-cli --bin codex-exec-server   # sandbox_e2e 需要
 CODEX_FORK_PG_TEST_URL=postgres://postgres:codex@127.0.0.1:55432/codex \
   cargo test -j 2 --no-fail-fast -p codex-fork-pg -p codex-fork-ext
 ```
@@ -182,6 +209,7 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 | `fork/ext/tests/handoff_e2e.rs` 用例 1 | file store：SIGTERM → 同一 turn_id 恢复 → B 上 `echo $TRACE_ID` 输出带 env |
 | `fork/ext/tests/handoff_e2e.rs` 用例 2 | 两个独立 CODEX_HOME 只共享 PG：恢复成功，且两边都没有对话文件 |
 | `core` 中 `fork_env` 单测 | 前缀与变量名过滤 |
+| `fork/ext/tests/sandbox_e2e.rs` | 真实 `codex-exec-server` 作沙箱：thread/start 绑定 → 杀掉 pod A → pod B 不调 `environment/add` 直接 resume，命令仍在沙箱执行 → fork 出的 thread 继承沙箱 |
 | `fork/queue/tests/queue_env.rs` + `fork/queue` 单测 | 队列项 metadata：`queue/start` 和空闲派发都应用到 turn env；update 保留；list 不暴露 |
 
 当前状态：以上测试在 `1ba5814` 上，用本地 debug 构建全部通过。
@@ -221,7 +249,8 @@ env "CARGO_BIN_EXE_codex-app-server=/path/to/codex-app-server" CODEX_FORK_PG_TES
 - [ ] 远端 `fork/main` 的去留（旧实现；重置需要 force push）。
 - [ ] 二期：PG 持久化的 QueueStore（目前 PG 模式下用本地 sqlite 队列）。
 - [ ] v2：在 step 边界挂起（需要改 core turn loop，冲突风险中等）；等 v1 实际使用后再决定。
-- [ ] B 恢复时让 remote environment 自动可用（目前依赖 B 端预先配置）。
+- [x] B 恢复时让 remote environment 自动可用（3.4 沙箱绑定）。
+- [ ] 沙箱绑定的 PG 表需要在有 Postgres 的环境里跑一次端到端验证。
 - [ ] 本地 sqlite 日志不落盘的部署配置，以及验证。
 
 ## 8. 安全

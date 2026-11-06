@@ -6,19 +6,21 @@
 //! the epoch it claimed, so a stale pod cannot keep writing after another pod took the thread over.
 //!
 //! [`PgHandoffStore`] shares the same database and offers an exactly-once claim of a pending
-//! unfinished-turn handoff record.
+//! unfinished-turn handoff record. [`PgSandboxStore`] keeps write-once thread → sandbox bindings.
 
 mod db;
 mod handoff;
 mod projection;
+mod sandbox;
 mod store;
 
 pub use handoff::HandoffRecord;
 pub use handoff::PgHandoffStore;
-pub use store::PgThreadStore;
-pub use store::PgThreadStoreConfig;
+pub use sandbox::PgSandboxStore;
 /// Re-exported so dependents share this crate's driver feature setup.
 pub use sqlx;
+pub use store::PgThreadStore;
+pub use store::PgThreadStoreConfig;
 
 /// Creates a pool without connecting (usable from sync code). Stores built on it run their
 /// migrations lazily before their first query.
