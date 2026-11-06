@@ -126,7 +126,7 @@ v1 是"立即停"：进行中的工具调用会被中断，B 上模型看到中�
 | `app-server-protocol/src/protocol/v2/thread.rs` | `ThreadQueueAddParams.responsesapiClientMetadata`（1 个字段） |
 | `ext/queue/src/service.rs` | 5 处单行 hook：入队编码、update 保留、两条出队路径用 `fork_request(input, env)` |
 | `ext/queue/Cargo.toml` | 依赖 `codex-fork-queue` |
-| `app-server/tests/suite/v2/*.rs`、`tui/src/session_queue_commands.rs` | 结构体字面量补 `responsesapi_client_metadata: None`（新字段导致，共 12 行） |
+| `app-server/tests/suite/v2/*.rs`、`tui/src/session_queue_commands.rs` | 结构体字面量补 `responsesapi_client_metadata: None`（新字段导致，共 5 行；其余用 `..submission()` 的不受影响） |
 | `app-server/src/extensions.rs` | 安装 fork extension（1 行） |
 | `app-server/src/request_processors/thread_processor.rs` | resume 允许没有 rollout path |
 
