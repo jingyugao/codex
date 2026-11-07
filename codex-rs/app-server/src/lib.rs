@@ -123,7 +123,7 @@ mod effective_plugin_change;
 mod error_code;
 mod extensions;
 // FORK: fork-only code; upstream files only call into it.
-mod fork_hooks;
+pub mod fork_hooks;
 mod external_agent_migration;
 mod external_auth;
 mod filters;

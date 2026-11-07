@@ -195,25 +195,15 @@ jobs:
             ${{ runner.temp }}/codex-musl-tools-x86_64-unknown-linux-musl
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-  # Fork crates and the hook points they rely on, including the cross-process handoff test.
+  # Fork hook points only. The features built on them (Postgres store, handoff, sandbox
+  # binding) and their end-to-end tests live in jingyugao/hcodex.
   fork-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: codex
-          POSTGRES_DB: codex
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s
-          --health-timeout 5s --health-retries 20
     env:
       CARGO_BUILD_JOBS: '3'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
-      CODEX_FORK_PG_TEST_URL: postgres://postgres:codex@127.0.0.1:5432/codex
     defaults:
       run:
         working-directory: codex-rs
@@ -237,48 +227,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             codex-rs/target
-          key: fork-tests-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.sha }}
+          key: fork-tests-v2-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
-            fork-tests-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-
-
-      - name: Fetch prebuilt V8 for the Code Mode host
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(awk '/^name = "v8"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
-          target=x86_64-unknown-linux-gnu
-          profile=ptrcomp_sandbox_release
-          dir="$RUNNER_TEMP/rusty-v8"
-          mkdir -p "$dir"
-          for file in "rusty_v8_${profile}_$target.sha256" "librusty_v8_${profile}_$target.a.gz" \
-            "src_binding_${profile}_$target.rs"; do
-            curl -fsSL -o "$dir/$file" \
-              "https://github.com/openai/codex/releases/download/rusty-v8-v$version/$file"
-          done
-          (cd "$dir" && sha256sum -c "rusty_v8_${profile}_$target.sha256")
-          {
-            echo "RUSTY_V8_ARCHIVE=$dir/librusty_v8_${profile}_$target.a.gz"
-            echo "RUSTY_V8_SRC_BINDING_PATH=$dir/src_binding_${profile}_$target.rs"
-          } >> "$GITHUB_ENV"
-
-      - name: Build binaries for the end-to-end tests
-        run: |
-          cargo build -p codex-app-server --bin codex-app-server
-          cargo build -p codex-exec-server-cli --bin codex-exec-server
-          cargo build -p codex-code-mode-host --bin codex-code-mode-host
-
-      - name: Test fork crates
-        env:
-          RUST_MIN_STACK: '8388608'
-        run: cargo test -p codex-fork-pg -p codex-fork-ext
+            fork-tests-v2-${{ hashFiles('codex-rs/Cargo.lock') }}-
 
       - name: Test fork hook points
         run: |
-          cargo test -p codex-core --lib fork_env
+          cargo test -p codex-core --lib fork_hooks
           cargo test -p codex-hooks --lib
 
-      - name: Lint fork crates
-        run: cargo clippy -p codex-fork-pg -p codex-fork-ext --all-targets -- -D warnings
+      - name: Lint crates with fork hook points
+        run: cargo clippy -p codex-core -p codex-hooks -p codex-app-server --lib -- -D warnings
 
       - name: Save test build cache
         if: always() && !cancelled() && steps.test-cache.outputs.cache-hit != 'true'

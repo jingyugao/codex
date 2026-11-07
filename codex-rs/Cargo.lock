@@ -2115,7 +2115,6 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-file-watcher",
- "codex-fork-ext",
  "codex-git-attribution",
  "codex-git-utils",
  "codex-goal-extension",
@@ -3028,7 +3027,6 @@ dependencies = [
  "codex-features",
  "codex-feedback",
  "codex-file-system",
- "codex-fork-pg",
  "codex-git-utils",
  "codex-guardian-context",
  "codex-guardian-reviewer",
@@ -3639,54 +3637,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "codex-fork-ext"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-app-server-protocol",
- "codex-core",
- "codex-extension-api",
- "codex-fork-pg",
- "codex-protocol",
- "codex-queue-extension",
- "codex-thread-store",
- "codex-utils-absolute-path",
- "codex-utils-cargo-bin",
- "codex-utils-path-uri",
- "core_test_support",
- "futures",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "codex-fork-pg"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "codex-protocol",
- "codex-rollout",
- "codex-thread-store",
- "codex-utils-absolute-path",
- "pretty_assertions",
- "serde",
- "serde_json",
- "sqlx",
- "sqlx-macros",
- "sqlx-postgres",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
