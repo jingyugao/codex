@@ -6,12 +6,37 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::Weak;
 
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_thread_store::QueueStore;
+
+/// Builds a queue store, or `None` to keep the configured upstream queue backend.
+pub type QueueStoreFactory = dyn Fn(&Config) -> Option<Arc<dyn QueueStore>> + Send + Sync;
+
+static QUEUE_STORE_FACTORY: OnceLock<Box<QueueStoreFactory>> = OnceLock::new();
+
+/// Registers a host-owned queue backend before the app-server starts. The first factory wins.
+pub fn set_queue_store_factory(
+    factory: impl Fn(&Config) -> Option<Arc<dyn QueueStore>> + Send + Sync + 'static,
+) -> bool {
+    QUEUE_STORE_FACTORY.set(Box::new(factory)).is_ok()
+}
+
+/// Keeps the upstream backend when the host has not selected a replacement.
+pub(crate) fn queue_store(
+    config: &Config,
+    upstream: Option<Arc<dyn QueueStore>>,
+) -> Option<Arc<dyn QueueStore>> {
+    QUEUE_STORE_FACTORY
+        .get()
+        .and_then(|factory| factory(config))
+        .or(upstream)
+}
 
 /// Installs host extensions into each thread extension registry the app-server builds.
 pub type ExtensionInstaller =
@@ -55,7 +80,10 @@ pub(crate) fn resume_rollout_path(rollout_path: Option<PathBuf>) -> Option<PathB
 
 /// Resume response: an empty path (see [`resume_rollout_path`]) means there is no rollout file.
 pub(crate) fn drop_empty_path(path: &mut Option<PathBuf>) {
-    if path.as_ref().is_some_and(|path| path.as_os_str().is_empty()) {
+    if path
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
         *path = None;
     }
 }
