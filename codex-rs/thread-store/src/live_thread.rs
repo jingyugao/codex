@@ -42,6 +42,8 @@ pub struct LiveThread {
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
     persistence_telemetry: RolloutPersistenceTelemetry,
+    // FORK: clones share a terminal lifecycle so delayed cleanup cannot close a newer writer.
+    closed: Arc<Mutex<bool>>,
 }
 
 /// Owns persistence acquisition and its live thread while initialization is still fallible.
@@ -146,6 +148,7 @@ impl LiveThread {
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
             persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+            closed: Arc::default(), // FORK
         })
     }
 
@@ -216,6 +219,7 @@ impl LiveThread {
                 thread_store,
                 metadata_sync: Arc::new(Mutex::new(metadata_sync)),
                 persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
+                closed: Arc::default(), // FORK
             },
             history,
         ))
@@ -303,10 +307,15 @@ impl LiveThread {
     }
 
     pub async fn shutdown(&self) -> ThreadStoreResult<()> {
+        let mut closed = self.closed.lock().await; // FORK
+        if *closed {
+            return Ok(());
+        }
         let metadata_result = self
             .flush_pending_metadata_update_for_existing_history()
             .await;
         let shutdown_result = self.thread_store.shutdown_thread(self.thread_id).await;
+        *closed = true; // FORK: shutdown is terminal, including a reported persistence failure.
         match (metadata_result, shutdown_result) {
             (Err(metadata_error), Err(shutdown_error)) => Err(ThreadStoreError::Internal {
                 message: format!(
@@ -319,7 +328,13 @@ impl LiveThread {
     }
 
     pub async fn discard(&self) -> ThreadStoreResult<()> {
-        self.thread_store.discard_thread(self.thread_id).await
+        let mut closed = self.closed.lock().await; // FORK
+        if *closed {
+            return Ok(());
+        }
+        let result = self.thread_store.discard_thread(self.thread_id).await;
+        *closed = true;
+        result
     }
 
     pub async fn load_history(

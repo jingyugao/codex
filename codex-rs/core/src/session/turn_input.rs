@@ -459,7 +459,11 @@ async fn start_or_steer(
             let _admission = if is_delegated_input {
                 None
             } else {
-                let Some(admission) = session.services.extensions.admit_turn_start() else {
+                let Some(admission) = crate::fork_hooks::admit_turn_start(
+                    &session.services.extensions,
+                    session.thread_id,
+                ) else {
+                    // FORK
                     return Ok(TurnInputSubmission::NotSubmitted {
                         reason: NotSubmittedReason::ServerDraining,
                     });
@@ -543,7 +547,8 @@ async fn start_if_idle(
         });
     }
 
-    let _admission = session.services.extensions.admit_turn_start();
+    let _admission =
+        crate::fork_hooks::admit_turn_start(&session.services.extensions, session.thread_id); // FORK
     // A one-shot review delegate completes its already-running parent's work.
     // Its explicit input carries parent lineage; automatic starts do not qualify.
     if _admission.is_none()

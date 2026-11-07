@@ -294,6 +294,10 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let Some(_admission) = crate::fork_hooks::admit_task_start(self, &turn_context).await
+        else {
+            return;
+        }; // FORK
         // Replace the cache; in-flight acquisitions retain their previous Arc.
         self.services
             .thread_extension_data

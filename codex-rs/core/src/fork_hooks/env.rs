@@ -10,6 +10,7 @@
 //! turn's extension data instead; metadata entries win over seeded values.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::codex_thread::CodexThread;
 use crate::session::turn_context::TurnContext;
@@ -72,6 +73,47 @@ fn is_valid_env_name(name: &str) -> bool {
 }
 
 impl CodexThread {
+    /// FORK: close host admission while the supplied threads are idle, then begin shutdown.
+    /// The host must serialize loading additional threads in the same workspace.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn locks coordinate the idle check with turn registration"
+    )]
+    pub async fn fork_begin_idle_shutdown(
+        threads: &[Arc<CodexThread>],
+        close_admission: impl FnOnce() -> bool,
+    ) -> bool {
+        let mut ordered: Vec<_> = threads.iter().collect();
+        ordered.sort_unstable_by_key(|thread| Arc::as_ptr(thread) as usize);
+        ordered.dedup_by_key(|thread| Arc::as_ptr(thread) as usize);
+
+        let mut active_turns = Vec::with_capacity(ordered.len());
+        for thread in &ordered {
+            let active = thread.session.active_turn.lock().await;
+            if active.is_some() {
+                return false;
+            }
+            active_turns.push(active);
+        }
+        for thread in &ordered {
+            if !thread.list_background_terminals().await.is_empty() {
+                return false;
+            }
+        }
+        if !close_admission() {
+            return false;
+        }
+        for thread in &ordered {
+            thread
+                .session
+                .services
+                .local_agent_runtime
+                .request_shutdown();
+        }
+        drop(active_turns);
+        true
+    }
+
     /// FORK: returns the active regular turn's ID and resolved fork env, if a turn is running.
     pub async fn fork_active_turn_env(&self) -> Option<(String, BTreeMap<String, String>)> {
         let active = self.session.active_turn.lock().await;

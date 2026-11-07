@@ -28,7 +28,10 @@ pub(super) async fn submit(
     // CodexThread already checks local agent capacity before submitting this operation.
     // Preserve the host's drain gate when accepting work for an idle recipient.
     let _admission = if session.active_turn.lock().await.is_none() {
-        let Some(admission) = session.services.extensions.admit_turn_start() else {
+        let Some(admission) =
+            crate::fork_hooks::admit_turn_start(&session.services.extensions, session.thread_id)
+        else {
+            // FORK
             return Ok(TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::ServerDraining,
             });
