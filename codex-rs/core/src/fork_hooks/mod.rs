@@ -8,13 +8,16 @@ mod env;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use codex_hooks::Hooks;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_thread_store::ThreadStore;
 
 pub use env::FORK_ENV_METADATA_PREFIX;
 pub use env::ForkTurnEnv;
 
+use crate::config::Config;
 use crate::session::turn_context::TurnContext;
 
 /// Exec: the shell environment policy with the turn's fork env added to `set`, so the local,
@@ -49,4 +52,10 @@ pub(crate) fn environment_hook_env(
 /// for local child processes only.
 pub(crate) fn strip_client_env(metadata: &mut BTreeMap<String, String>) {
     metadata.retain(|key, _| !env::is_fork_env_metadata_key(key));
+}
+
+/// Thread store: Postgres when `CODEX_FORK_THREAD_STORE` is set, else `None` for the configured
+/// upstream store.
+pub(crate) fn thread_store(config: &Config) -> Option<Arc<dyn ThreadStore>> {
+    codex_fork_pg::thread_store_from_env(&config.model_provider_id)
 }

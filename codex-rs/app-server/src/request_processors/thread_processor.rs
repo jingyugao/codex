@@ -4434,6 +4434,7 @@ impl ThreadRequestProcessor {
                 }
                 let instruction_sources = codex_thread.legacy_instruction_sources().await;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
+                let rollout_path = crate::fork_hooks::resume_rollout_path(rollout_path); // FORK
                 let Some(rollout_path) = rollout_path else {
                     let error =
                         internal_error(format!("rollout path missing for thread {thread_id}"));
@@ -5277,6 +5278,7 @@ impl ThreadRequestProcessor {
         thread.id = thread_id.to_string();
         thread.session_id = session_id;
         thread.path = Some(rollout_path.to_path_buf());
+        crate::fork_hooks::drop_empty_path(&mut thread.path); // FORK
         if include_turns {
             let history_items = thread_history.get_rollout_items();
             populate_thread_turns_from_history(

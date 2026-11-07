@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "fork/*", # FORK: fork-only crates, kept out of upstream lists to avoid rebase conflicts.
     "aws-auth",
     "analytics",
     "agent-graph-store",

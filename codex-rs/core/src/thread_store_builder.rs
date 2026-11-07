@@ -57,6 +57,10 @@ impl<'config> ThreadStoreBuilder<'config> {
             state_db,
             additional_cleanup,
         } = self;
+        // FORK: Postgres thread store when CODEX_FORK_THREAD_STORE is set.
+        if let Some(store) = crate::fork_hooks::thread_store(config) {
+            return store;
+        }
         match &config.experimental_thread_store {
             ThreadStoreConfig::Local => {
                 let compression_enabled = config
