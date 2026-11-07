@@ -57,6 +57,10 @@ impl<'config> ThreadStoreBuilder<'config> {
             state_db,
             additional_cleanup,
         } = self;
+        // FORK: the host-registered thread store, if any (hcodex: Postgres).
+        if let Some(store) = crate::fork_hooks::thread_store(config) {
+            return store;
+        }
         match &config.experimental_thread_store {
             ThreadStoreConfig::Local => {
                 let compression_enabled = config

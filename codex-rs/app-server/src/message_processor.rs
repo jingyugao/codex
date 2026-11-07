@@ -352,6 +352,7 @@ impl MessageProcessor {
             }),
             ThreadStoreConfig::InMemory { .. } => None,
         };
+        let queue_store = crate::fork_hooks::queue_store(&config, queue_store); // FORK
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let environment_manager_for_extensions = Arc::clone(&environment_manager);
         let restriction_product = session_source.restriction_product();

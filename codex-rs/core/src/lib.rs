@@ -100,6 +100,8 @@ mod environment_selection;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
+// FORK: fork-only code; upstream files only call into it.
+pub mod fork_hooks;
 #[cfg(test)]
 mod git_info_tests;
 mod guardian;

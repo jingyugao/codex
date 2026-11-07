@@ -125,6 +125,8 @@ mod extensions;
 mod external_agent_migration;
 mod external_auth;
 mod filters;
+// FORK: fork-only code; upstream files only call into it.
+pub mod fork_hooks;
 mod fs_watch;
 mod fuzzy_file_search;
 mod gateway_oauth_notifications;

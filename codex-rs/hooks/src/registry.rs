@@ -419,3 +419,7 @@ pub(crate) fn command_from_argv(
     scrub_non_inheritable_env_vars(command.as_std_mut());
     Some(command)
 }
+
+// FORK: private-field access for fork hooks.
+#[path = "fork_hooks/registry.rs"]
+mod fork;

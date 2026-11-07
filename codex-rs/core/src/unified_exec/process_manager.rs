@@ -1492,6 +1492,11 @@ impl UnifiedExecProcessManager {
     ) -> Result<(UnifiedExecAttempt, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let prepared = &request.prepared;
         let shell_environment_policy = prepared.turn_environment.shell_environment_policy();
+        // FORK: per-turn env.
+        let shell_environment_policy = &crate::fork_hooks::exec_shell_policy(
+            shell_environment_policy,
+            &context.step_context.turn,
+        );
         let local_policy_env = create_env(shell_environment_policy, /*thread_id*/ None);
         let mut env = local_policy_env.clone();
         #[cfg(windows)]

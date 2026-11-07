@@ -1,0 +1,310 @@
+name: Fork Linux release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Source ref or commit to build
+        default: main
+        required: true
+        type: string
+      publish:
+        description: Publish the verified build as the latest GitHub Release
+        default: false
+        required: false
+        type: boolean
+  # Tags verify a commit after the fact (tests and build, no publish); day-to-day checks run locally.
+  push:
+    tags: ["fork-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release-${{ inputs.source_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.source.outputs.tag }}
+    env:
+      TARGET: x86_64-unknown-linux-musl
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      OPENSSL_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Resolve source and build paths
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=fork-${sha:0:7}" >> "$GITHUB_OUTPUT"
+          {
+            echo "CARGO_HOME=$GITHUB_WORKSPACE/.cargo-home"
+            echo "CARGO_TARGET_DIR=$HOME/.cache/codex-ci/cargo-target"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/.cargo-home" "$HOME/.cache/codex-ci/cargo-target"
+
+      - name: Restore build cache
+        id: cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            ~/.cache/codex-ci/cargo-target
+            /tmp/codex-package
+            ${{ runner.temp }}/codex-musl-tools-x86_64-unknown-linux-musl
+          key: fork-musl-rust195-release-nolto-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ steps.source.outputs.sha }}
+          restore-keys: |
+            fork-musl-rust195-release-nolto-v1-${{ hashFiles('codex-rs/Cargo.lock') }}-
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.8.3"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+
+      - name: Build complete CLI binaries
+        uses: ./.github/actions/build-cargo-package-binaries
+        with:
+          target: x86_64-unknown-linux-musl
+          binaries: codex codex-code-mode-host codex-exec-server
+          build-mode: release
+
+      - name: Assemble installation archive
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_dir="$CARGO_TARGET_DIR/$TARGET/release"
+          package_dir="$RUNNER_TEMP/codex-package"
+          uv run --no-project --python 3.13 python scripts/build_codex_package.py \
+            --target "$TARGET" --variant codex --cargo-profile release \
+            --entrypoint-bin "$release_dir/codex" \
+            --code-mode-host-bin "$release_dir/codex-code-mode-host" \
+            --exec-server-bin "$release_dir/codex-exec-server" \
+            --bwrap-bin "$release_dir/bwrap" \
+            --package-dir "$package_dir" --strip all
+          cp LICENSE "$package_dir/LICENSE"
+          if [[ -f NOTICE ]]; then cp NOTICE "$package_dir/NOTICE"; fi
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_SHA" \
+            --arg tag "$RELEASE_TAG" --arg target "$TARGET" \
+            --arg bwrapSha256 "$CODEX_BWRAP_SHA256" \
+            '{repository:$repository,commit:$commit,releaseTag:$tag,target:$target,
+              rust:"1.95.0",profile:"release",lto:false,codegenUnits:16,bwrapSha256:$bwrapSha256}' \
+            > "$package_dir/build-info.json"
+          mkdir -p dist
+          tar -czf dist/codex-linux-x64.tar.gz -C "$package_dir" .
+          (cd dist && sha256sum codex-linux-x64.tar.gz > SHA256SUMS)
+          echo "PACKAGE_DIR=$package_dir" >> "$GITHUB_ENV"
+
+      - name: Verify static binaries and Debian compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in bin/codex bin/codex-code-mode-host bin/codex-exec-server codex-path/rg codex-resources/bwrap; do
+            dynamic="$(readelf -d "$PACKAGE_DIR/$binary")"
+            if grep '(NEEDED)' <<< "$dynamic" >/dev/null; then
+              echo "Unexpected shared library dependency: $binary" >&2
+              exit 1
+            fi
+          done
+          docker run --rm --network none \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/dist,dst=/release,readonly" \
+            debian:bookworm-slim sh -ec '
+              mkdir /tmp/codex
+              tar -xzf /release/codex-linux-x64.tar.gz -C /tmp/codex
+              /tmp/codex/bin/codex --version
+              /tmp/codex/bin/codex-exec-server --version
+              /tmp/codex/bin/codex-code-mode-host --help >/dev/null
+              /tmp/codex/codex-path/rg --version
+              /tmp/codex/codex-resources/bwrap --version
+            '
+
+      - name: Verify packaged Code Mode and sandbox
+        working-directory: scripts/codex_package/smoke_tests
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/sdk/python/src:${{ github.workspace }}/sdk/python/tests
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/dist/codex-linux-x64.tar.gz"
+          # Selected CLI-only tests do not consume the app-server or symbols archives.
+          uv run --frozen pytest -v --compression gzip --package-target "$TARGET" \
+            --cli-archive "$archive" --app-server-archive "$archive" --symbols-archive "$archive" \
+            test_codex_package.py::test_cli_public_commands \
+            test_codex_package.py::test_cli_version_matches_release_sources \
+            'test_codex_package.py::test_app_server_runs_code_mode_through_python_sdk[codex]' \
+            'test_codex_package.py::test_packaged_executor_initializes_and_enforces_sandbox[cli_root]'
+
+      - name: Verify bundled sandbox integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d "$RUNNER_TEMP/codex-bwrap-check.XXXXXXXX")"
+          trap 'rm -rf "$scratch"' EXIT
+          mkdir -p "$scratch/package" "$scratch/home/.codex" "$scratch/path" "$scratch/workspace"
+          tar -xzf dist/codex-linux-x64.tar.gz -C "$scratch/package"
+          cd "$scratch/workspace"
+          env -i HOME="$scratch/home" CODEX_HOME="$scratch/home/.codex" PATH="$scratch/path" \
+            "$scratch/package/bin/codex" sandbox -- /bin/true
+          printf '\0' >> "$scratch/package/codex-resources/bwrap"
+          if env -i HOME="$scratch/home" CODEX_HOME="$scratch/home/.codex" PATH="$scratch/path" \
+            "$scratch/package/bin/codex" sandbox -- /bin/true > "$scratch/stdout" 2> "$scratch/stderr"; then
+            echo 'Modified bundled bwrap was unexpectedly accepted' >&2
+            exit 1
+          fi
+          grep -F 'bundled bubblewrap digest mismatch' "$scratch/stderr"
+
+      - name: Upload verified release assets
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-linux-x64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Save build cache even if validation fails
+        if: always() && !cancelled() && steps.cache.outputs.cache-hit != 'true' && steps.cache.outputs.cache-primary-key != ''
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            .cargo-home/registry
+            .cargo-home/git
+            ~/.cache/codex-ci/cargo-target
+            /tmp/codex-package
+            ${{ runner.temp }}/codex-musl-tools-x86_64-unknown-linux-musl
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  # Fork hook points only. The features built on them (Postgres store, handoff, sandbox
+  # binding) and their end-to-end tests live in jingyugao/hcodex.
+  fork-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: "3"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libcap-dev libasound2-dev
+
+      - name: Restore test build cache
+        id: test-cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target
+          key: fork-tests-v2-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            fork-tests-v2-${{ hashFiles('codex-rs/Cargo.lock') }}-
+
+      - name: Test fork hook points
+        run: |
+          cargo test -p codex-core --lib fork_hooks
+          cargo test -p codex-hooks --lib
+
+      - name: Lint crates with fork hook points
+        run: cargo clippy -p codex-core -p codex-hooks -p codex-app-server --lib -- -D warnings
+
+      - name: Save test build cache
+        if: always() && !cancelled() && steps.test-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            codex-rs/target
+          key: ${{ steps.test-cache.outputs.cache-primary-key }}
+
+  publish:
+    needs: [build, fork-tests]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-linux-x64
+          path: dist
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.sha }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          version="$(tar -xOf dist/codex-linux-x64.tar.gz ./codex-package.json | jq -r .version)"
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Linux x86_64 musl build from commit $SOURCE_SHA.
+
+          Includes the CLI, Code Mode host, executor, ripgrep and bundled bubblewrap.
+          Keep the complete extracted directory. No Rust, Python or Node.js runtime is required.
+          The source CLI reports $version; build-info.json identifies this fork release.
+          The optional native voice runtime is not bundled.
+
+          Install:
+          \`\`\`sh
+          mkdir -p "\$HOME/.local/opt/codex"
+          curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/codex-linux-x64.tar.gz | tar -xz -C "\$HOME/.local/opt/codex"
+          export PATH="\$HOME/.local/opt/codex/bin:\$PATH"
+          codex --version
+          \`\`\`
+
+          Use codex app-server for the App Server. SHA256SUMS is attached.
+          Validation: static binaries, Debian 12 startup, Code Mode and sandbox smoke tests,
+          and fork tests (Postgres thread store, turn and queue env, cross-process turn handoff,
+          thread sandbox binding, Code Mode through the sandbox).
+          EOF
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-draft"; then
+            if [[ "$(cat "$RUNNER_TEMP/release-draft")" != true ]]; then
+              echo 'Release is already published; refusing to replace its assets' >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" --draft \
+              --title "Codex fork $RELEASE_TAG (Linux amd64)" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/codex-linux-x64.tar.gz dist/SHA256SUMS
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
