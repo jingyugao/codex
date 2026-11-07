@@ -57,7 +57,7 @@ impl<'config> ThreadStoreBuilder<'config> {
             state_db,
             additional_cleanup,
         } = self;
-        // FORK: Postgres thread store when CODEX_FORK_THREAD_STORE is set.
+        // FORK: the host-registered thread store, if any (hcodex: Postgres).
         if let Some(store) = crate::fork_hooks::thread_store(config) {
             return store;
         }

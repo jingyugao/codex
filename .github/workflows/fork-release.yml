@@ -13,9 +13,9 @@ on:
         default: false
         required: false
         type: boolean
-  # Feature-branch pushes build and test the pushed commit without publishing.
+  # Tags verify a commit after the fact (tests and build, no publish); day-to-day checks run locally.
   push:
-    branches: ["feat/fork-**"]
+    tags: ["fork-v*"]
 
 permissions:
   contents: read

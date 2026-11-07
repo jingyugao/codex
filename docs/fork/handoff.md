@@ -119,6 +119,11 @@ cd codex-rs
 cargo test -p codex-core --lib fork_hooks
 cargo test -p codex-hooks --lib
 cargo clippy -p codex-core -p codex-hooks -p codex-app-server --lib -- -D warnings
+# 上游的格式与依赖检查（fork 上已关掉上游 workflow，只能本地跑）
+git diff --name-only --diff-filter=d main -- '*.rs' | sed 's|^codex-rs/||' | xargs rustfmt --edition 2024 \
+  --config-path rustfmt.toml --config skip_children=true --check
+cargo shear --deny-warnings        # cargo +1.95.0 install cargo-shear --version 1.11.2 --locked
+npx prettier@3.5.3 --check ../.github/workflows/fork-release.yml
 ```
 
 ### 构建脚本
@@ -139,7 +144,9 @@ scripts/fork/build.sh --source . --install-deps
 
 ### CI（`.github/workflows/fork-release.yml`）
 
-- push 到 `feat/fork-**` 分支时触发：
+日常验证在本地跑（上面的命令）；CI 只做事后验证。fork 仓库里上游自带的 workflow 都已在 Actions 设置里关掉（`gh workflow disable`），PR 上不再跑。
+
+- push `fork-v*` tag 时触发：
   - `build`：musl 静态 release 包（`codex`、`codex-code-mode-host`、`codex-exec-server`），产物作为 artifact 上传。
   - `fork-tests`：上面的单测与 clippy。
 - 发布 GitHub Release 只在手动触发时进行：`workflow_dispatch` 且 `publish=true`。
