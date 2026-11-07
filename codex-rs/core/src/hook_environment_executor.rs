@@ -53,7 +53,8 @@ pub(crate) fn with_tool_environment_hooks(
     environments: &TurnEnvironmentSnapshot,
     target_environments: &[&str],
 ) -> Hooks {
-    session.hooks().with_environment_hooks(
+    // FORK: per-turn env.
+    crate::fork_hooks::hooks_with_turn_env(&session.hooks(), turn).with_environment_hooks(
         environment_hook_sources(environments, target_environments),
         Arc::new(EnvironmentCommandExecutor {
             environments: environments.clone(),
@@ -167,6 +168,7 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
         let environment_id = environment_id.to_owned();
         let command = command.to_owned();
         let env = env.clone();
+        let env = crate::fork_hooks::environment_hook_env(&self.turn, env); // FORK
         let input_json = input_json.to_owned();
         async move {
             let environment = self

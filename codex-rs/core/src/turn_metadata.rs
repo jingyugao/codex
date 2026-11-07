@@ -467,6 +467,7 @@ impl TurnMetadataState {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        crate::fork_hooks::strip_client_env(&mut extra); // FORK
         // Extract Guardian's internal parent before filtering configured metadata keys.
         // Ordinary app-server client metadata stays in `extra`.
         let parent_response_id =
@@ -624,3 +625,7 @@ async fn git_workspaces(
 #[cfg(test)]
 #[path = "turn_metadata_tests.rs"]
 mod tests;
+
+// FORK: private-field access for fork hooks.
+#[path = "fork_hooks/turn_metadata.rs"]
+mod fork;
