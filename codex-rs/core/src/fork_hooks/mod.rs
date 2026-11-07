@@ -73,5 +73,7 @@ pub fn set_thread_store_factory(
 /// Thread store: the host's store when it registered a factory that returns one, else `None` for
 /// the configured upstream store.
 pub(crate) fn thread_store(config: &Config) -> Option<Arc<dyn ThreadStore>> {
-    THREAD_STORE_FACTORY.get().and_then(|factory| factory(config))
+    THREAD_STORE_FACTORY
+        .get()
+        .and_then(|factory| factory(config))
 }

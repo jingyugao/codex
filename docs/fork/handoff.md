@@ -9,7 +9,7 @@
 本 fork 不合并回上游，但要持续拉取上游更新，所以**对上游文件的改动越少越好**：
 
 - 插桩：每个被改动的上游 crate 有一个 `src/fork_hooks/` 目录，fork 在该 crate 里的代码都放在这里。上游文件只**插入**对 `crate::fork_hooks::xxx(...)` 的单行调用，尽量不修改原有行。`git grep -n "fork_hooks"` 列出所有接入点。
-- 需要访问上游私有字段的方法也放在 `fork_hooks/` 目录，在对应上游文件末尾用 `#[path = "fork_hooks/xxx.rs"] mod fork;` 挂成它的子模块（子模块可以访问父模块的私有字段）。
+- 需要访问上游私有字段的方法也放在 `fork_hooks/` 目录，在对应上游文件末尾用 `#[path = "fork_hooks/xxx.rs"] mod fork;` 挂成它的子模块（子模块可以访问父模块的私有字段）。`#[path]` 里不要写 `..`（上游 CI 的 `cargo shear` 不认，会报 unlinked file），上游文件在子目录时把 `fork_hooks/` 放在它旁边，例如 `hooks/src/engine/fork_hooks/`。
 - 所有接入点都用 `// FORK` 注释标出。
 - 不改 `Cargo.toml` / `Cargo.lock`、配置类型、协议定义和生成文件（schema JSON、TypeScript、Python SDK）。
 - 上游已有的能力（例如排队消息带 metadata）直接用，不自己实现。
@@ -84,14 +84,15 @@
 
 ## 4. 对上游文件的改动（冲突点）
 
-`git diff main...HEAD --stat -- codex-rs ':!codex-rs/*/src/fork_hooks/*'` 列出对上游已有文件的全部改动（`main` 重置后即上游）。
+`git diff main...HEAD --stat -- codex-rs ':!codex-rs/*/fork_hooks/*'` 列出对上游已有文件的全部改动（`main` 重置后即上游）。
 
 插桩目录：
 
 | 目录 | 内容 |
 |---|---|
 | `core/src/fork_hooks/` | `mod.rs`：core 的接入函数和 `set_thread_store_factory`；`env.rs`：per-turn env；`turn_metadata.rs`：`turn_metadata` 的子模块（读私有 metadata） |
-| `hooks/src/fork_hooks/` | `registry.rs`、`command_runner.rs`：`Hooks` / `CommandHookRuntime` 的子模块（加 `with_command_env`） |
+| `hooks/src/fork_hooks/` | `registry.rs`：`Hooks` 的子模块（加 `with_command_env`） |
+| `hooks/src/engine/fork_hooks/` | `command_runner.rs`：`CommandHookRuntime` 的子模块（加 `with_command_env`） |
 | `app-server/src/fork_hooks/` | `mod.rs`：`add_extension_installer`、resume 时的 rollout path 处理 |
 
 接入点（上游已有文件）：

@@ -526,5 +526,5 @@ fn default_shell_program(environment: &[(OsString, OsString)]) -> OsString {
 mod tests;
 
 // FORK: private-field access for fork hooks.
-#[path = "../fork_hooks/command_runner.rs"]
+#[path = "fork_hooks/command_runner.rs"]
 mod fork;

@@ -122,11 +122,11 @@ mod dynamic_tools;
 mod effective_plugin_change;
 mod error_code;
 mod extensions;
-// FORK: fork-only code; upstream files only call into it.
-pub mod fork_hooks;
 mod external_agent_migration;
 mod external_auth;
 mod filters;
+// FORK: fork-only code; upstream files only call into it.
+pub mod fork_hooks;
 mod fs_watch;
 mod fuzzy_file_search;
 mod gateway_oauth_notifications;
