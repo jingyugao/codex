@@ -236,6 +236,11 @@ fn persisted_item_completed_event<'a>(
 ) -> Option<Cow<'a, EventMsg>> {
     match history_mode {
         ThreadHistoryMode::Legacy => {
+            // Code-mode response items cannot reconstruct their nested commands.
+            // Preserve canonical completions with the same bounded output as paginated history.
+            if matches!(event.item, TurnItem::CommandExecution(_)) {
+                return persisted_item_completed_event(ev, event, ThreadHistoryMode::Paginated);
+            }
             // Legacy rollouts keep only items with no lossless raw ResponseItem or legacy
             // equivalent.
             (matches!(
