@@ -631,7 +631,13 @@ impl ThreadHistoryBuilder {
         let id = payload
             .moderation
             .as_ref()
-            .map_or(legacy_id, |decision| decision.item_id.clone());
+            .map(|decision| decision.item_id.clone())
+            .or_else(|| {
+                (payload.delivery == Some(codex_protocol::items::AgentMessageDelivery::Async))
+                    .then(|| payload.item_id.clone())
+                    .flatten()
+            })
+            .unwrap_or(legacy_id);
         self.push_item_in_current_turn(ThreadItemPayload::AgentMessage {
             moderation: payload
                 .moderation
@@ -2175,6 +2181,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Hi there".into(),
                 phase: None,
@@ -2197,6 +2204,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Reply two".into(),
                 phase: None,
@@ -2992,6 +3000,7 @@ mod tests {
             },
         ];
         let events = vec![EventMsg::AgentMessage(AgentMessageEvent {
+            item_id: None,
             moderation: None,
             message: "Final reply".into(),
             phase: Some(CoreMessagePhase::FinalAnswer),
@@ -3140,6 +3149,7 @@ mod tests {
                 text: "first content".into(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "interlude".into(),
                 phase: None,
@@ -3191,6 +3201,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Working...".into(),
                 phase: None,
@@ -3216,6 +3227,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Second attempt complete.".into(),
                 phase: None,
@@ -3299,6 +3311,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "A1".into(),
                 phase: None,
@@ -3315,6 +3328,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "A2".into(),
                 phase: None,
@@ -3332,6 +3346,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "A3".into(),
                 phase: None,
@@ -3410,6 +3425,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "A1".into(),
                 phase: None,
@@ -3426,6 +3442,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "A2".into(),
                 phase: None,
@@ -4479,6 +4496,7 @@ mod tests {
         }));
         for message in ["draft", "answer"] {
             builder.handle_event(&EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: message.into(),
                 phase: None,
@@ -4789,6 +4807,7 @@ mod tests {
                 time_to_first_token_ms: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "still in b".into(),
                 phase: None,
@@ -4986,6 +5005,7 @@ mod tests {
                 duration_ms: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "still in b".into(),
                 phase: None,
@@ -5266,6 +5286,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "done".into(),
                 phase: None,

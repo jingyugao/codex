@@ -134,6 +134,7 @@ pub(super) fn rollout_items_from_messages(messages: Vec<ConversationMessage>) ->
                 last_model_visible_tokens = approx_tokens_from_byte_count_i64(response_item_bytes);
                 items.push(RolloutItem::EventMsg(EventMsg::AgentMessage(
                     AgentMessageEvent {
+                        item_id: None,
                         moderation: None,
                         message: message.text.clone(),
                         phase: None,
@@ -158,6 +159,7 @@ pub(super) fn rollout_items_from_messages(messages: Vec<ConversationMessage>) ->
 
 fn external_session_imported_marker_item() -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+        item_id: None,
         moderation: None,
         message: EXTERNAL_SESSION_IMPORTED_MARKER.to_string(),
         phase: None,

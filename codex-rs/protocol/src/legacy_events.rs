@@ -1,6 +1,7 @@
 use crate::ThreadId;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::items::AgentMessageContent;
+use crate::items::AgentMessageDelivery;
 use crate::items::AgentMessageItem;
 use crate::items::CollabAgentTool;
 use crate::items::CollabAgentToolCallItem;
@@ -131,6 +132,8 @@ impl AgentMessageItem {
         });
         let event = |message, moderation| {
             EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: (self.delivery == Some(AgentMessageDelivery::Async))
+                    .then(|| self.id.clone()),
                 message,
                 moderation,
                 phase: self.phase.clone(),
@@ -148,6 +151,9 @@ impl AgentMessageItem {
                     moderated: decision.moderated,
                 }),
             )];
+        }
+        if self.delivery == Some(AgentMessageDelivery::Async) {
+            return vec![event(texts.collect(), None)];
         }
         texts.map(|text| event(text.to_owned(), None)).collect()
     }
