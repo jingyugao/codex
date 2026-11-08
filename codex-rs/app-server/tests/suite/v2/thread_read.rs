@@ -2763,6 +2763,7 @@ fn append_agent_message(path: &Path, timestamp: &str, text: &str) -> anyhow::Res
             "timestamp": timestamp,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: text.to_string(),
                 phase: None,

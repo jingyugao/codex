@@ -4564,6 +4564,7 @@ async fn thread_resume_token_usage_replay_ignores_stale_interrupted_tail_turn() 
             "timestamp": meta_rfc3339,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Still running".to_string(),
                 phase: None,
@@ -4655,6 +4656,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
             "timestamp": meta_rfc3339,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Interrupted after usage".to_string(),
                 phase: None,
@@ -4978,6 +4980,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
             "timestamp": meta_rfc3339,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                item_id: None,
                 moderation: None,
                 message: "Still running".to_string(),
                 phase: None,

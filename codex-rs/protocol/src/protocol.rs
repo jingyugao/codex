@@ -2800,6 +2800,10 @@ impl fmt::Display for FinalOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentMessageEvent {
+    /// Async questions must keep their native ID when read back from legacy history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
     /// Legacy history assigns synthetic item IDs. Preserve the native ID for a moderated answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

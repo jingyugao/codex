@@ -1258,6 +1258,7 @@ mod tests {
         live_thread
             .append_items(&[
                 RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    item_id: None,
                     moderation: None,
                     message: "commentary".to_string(),
                     phase: Some(MessagePhase::Commentary),

@@ -40,6 +40,7 @@ fn rollout_user_message(text: &str) -> RolloutItem {
 
 fn rollout_agent_message(text: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+        item_id: None,
         moderation: None,
         message: text.to_string(),
         phase: None,
